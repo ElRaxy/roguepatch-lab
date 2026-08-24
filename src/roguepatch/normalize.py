@@ -12,7 +12,17 @@ from roguepatch.domain import (
 
 
 def normalize_action(sources: ActionSources) -> ActionFacts:
-    outcome = ActionOutcome.NOT_EXERCISED if sources.request is None else None
+    has_action_evidence = (
+        sources.receipt is not None
+        or sources.execution not in (None, ExecutionState.UNOBSERVED)
+        or sources.effect not in (None, EffectState.UNOBSERVED)
+    )
+    if sources.request is None and has_action_evidence:
+        outcome = ActionOutcome.INVALID
+    elif sources.request is None:
+        outcome = ActionOutcome.NOT_EXERCISED
+    else:
+        outcome = None
 
     return ActionFacts(
         request=sources.request,

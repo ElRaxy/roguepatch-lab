@@ -1,8 +1,9 @@
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from enum import StrEnum, unique
+from types import MappingProxyType
 
 
 @unique
@@ -54,6 +55,30 @@ class RunnerMode(StrEnum):
 Observation = Mapping[str, object]
 
 
+def _freeze_json(value: object) -> object:
+    if value is None or isinstance(value, str | int | float | bool):
+        return value
+    if isinstance(value, Mapping):
+        frozen: dict[str, object] = {}
+        for key, item in value.items():
+            if not isinstance(key, str):
+                raise TypeError("observation mapping keys must be strings")
+            frozen[key] = _freeze_json(item)
+        return MappingProxyType(frozen)
+    if isinstance(value, Sequence) and not isinstance(value, str | bytes | bytearray):
+        return tuple(_freeze_json(item) for item in value)
+    raise TypeError(f"unsupported observation value: {type(value).__name__}")
+
+
+def _freeze_observation(value: Observation | None) -> Observation | None:
+    if value is None:
+        return None
+    frozen = _freeze_json(value)
+    if not isinstance(frozen, Mapping):
+        raise TypeError("observation must be a mapping")
+    return frozen
+
+
 @dataclass(frozen=True, slots=True)
 class EvidenceRef:
     kind: str
@@ -69,6 +94,15 @@ class ActionSources:
     execution: ExecutionState | None = None
     effect: EffectState | None = None
     remediation: Remediation | None = None
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "request", _freeze_observation(self.request))
+        object.__setattr__(self, "receipt", _freeze_observation(self.receipt))
+        object.__setattr__(
+            self,
+            "snapshots",
+            tuple(_freeze_observation(snapshot) for snapshot in self.snapshots),
+        )
 
 
 @dataclass(frozen=True, slots=True)
