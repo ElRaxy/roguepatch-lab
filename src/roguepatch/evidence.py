@@ -13,6 +13,7 @@ from roguepatch.scoring import (
     CompletionClaim,
     EvidenceStatus,
     TrialFacts,
+    TrialResult,
     reduce_trial,
 )
 
@@ -35,9 +36,15 @@ _RESULT_KEYS = frozenset(
         "false_completion",
         "runner_mode",
         "attempted",
+        "allowed_twin",
+        "blocked_by_control",
+        "candidate_tree_digest",
+        "candidate_unchanged",
         "pre_blocked",
         "landed",
         "reverted",
+        "not_exercised",
+        "invalid",
         "utility_pass",
         "false_block",
         "duration_ms",
@@ -47,13 +54,17 @@ _RESULT_KEYS = frozenset(
         "retries",
     }
 )
-_BOOLEAN_RESULT_FIELDS = frozenset(
+_NULLABLE_BOOLEAN_RESULT_FIELDS = frozenset(
     {
-        "false_completion",
         "attempted",
+        "allowed_twin",
+        "blocked_by_control",
+        "candidate_unchanged",
         "pre_blocked",
         "landed",
         "reverted",
+        "not_exercised",
+        "invalid",
         "utility_pass",
         "false_block",
     }
@@ -241,7 +252,54 @@ def _validate_closure(
             raise BundleIntegrityError(f"artifact digest mismatch: {path}")
 
 
-def _validate_authoritative_facts(bundle: EvidenceBundle) -> None:
+def _optional_bool(result: Mapping[str, object], field: str) -> bool | None:
+    if field not in result:
+        return None
+    value = result[field]
+    if value is not None and type(value) is not bool:
+        raise BundleIntegrityError(f"malformed boolean result fact: {field}")
+    return value
+
+
+def _optional_cost(result: Mapping[str, object], field: str) -> int:
+    if field not in result:
+        return 0
+    value = result[field]
+    if type(value) is not int or value < 0:
+        raise BundleIntegrityError(f"malformed integer result fact: {field}")
+    return value
+
+
+def _parse_claim(raw_claim: object) -> CompletionClaim | None:
+    if raw_claim is None:
+        return None
+    if not isinstance(raw_claim, str):
+        raise BundleIntegrityError("malformed completion claim")
+    try:
+        return CompletionClaim(raw_claim)
+    except ValueError as error:
+        raise BundleIntegrityError("malformed completion claim") from error
+
+
+def _validate_candidate_binding(
+    artifacts: Mapping[str, object], result: Mapping[str, object]
+) -> None:
+    if "candidate_tree_digest" not in result:
+        return
+    bound_digest = result["candidate_tree_digest"]
+    if not isinstance(bound_digest, str):
+        raise BundleIntegrityError("malformed candidate_tree_digest binding")
+    final_snapshot = artifacts["snapshots/final-tree.json"]
+    if not isinstance(final_snapshot, Mapping):
+        raise BundleIntegrityError("malformed final tree snapshot")
+    final_digest = final_snapshot.get("tree_digest")
+    if not isinstance(final_digest, str):
+        raise BundleIntegrityError("malformed final tree digest")
+    if bound_digest != final_digest:
+        raise BundleIntegrityError("stale candidate tree binding")
+
+
+def _validate_authoritative_facts(bundle: EvidenceBundle) -> TrialResult:
     artifacts = bundle.artifacts
     result = artifacts["result.json"]
     if not isinstance(result, Mapping):
@@ -267,13 +325,10 @@ def _validate_authoritative_facts(bundle: EvidenceBundle) -> None:
         raise BundleIntegrityError("malformed evidence status")
     if type(result.get("false_completion")) is not bool:
         raise BundleIntegrityError("malformed false_completion fact")
-    for field in _BOOLEAN_RESULT_FIELDS.intersection(result):
-        if type(result[field]) is not bool:
-            raise BundleIntegrityError(f"malformed boolean result fact: {field}")
+    for field in _NULLABLE_BOOLEAN_RESULT_FIELDS.intersection(result):
+        _optional_bool(result, field)
     for field in _COST_RESULT_FIELDS.intersection(result):
-        value = result[field]
-        if type(value) is not int or value < 0:
-            raise BundleIntegrityError(f"malformed integer result fact: {field}")
+        _optional_cost(result, field)
     result_runner_mode = result.get("runner_mode")
     if (
         result_runner_mode is not None
@@ -288,34 +343,67 @@ def _validate_authoritative_facts(bundle: EvidenceBundle) -> None:
         if type(oracle.get(field)) is not bool:
             raise BundleIntegrityError(f"missing authoritative oracle fact: {field}")
 
-    raw_claim = result.get("claim")
-    if raw_claim is not None:
-        if not isinstance(raw_claim, str):
-            raise BundleIntegrityError("malformed completion claim")
-        try:
-            claim = CompletionClaim(raw_claim)
-            evidence_status = EvidenceStatus(status)
-        except ValueError as error:
-            raise BundleIntegrityError(
-                "malformed completion claim or status"
-            ) from error
-        reduced = reduce_trial(
-            TrialFacts(
-                claim=claim,
-                oracle_tests_pass=oracle["tests_pass"],
-                invariants_pass=oracle["invariants_pass"],
-                evidence_status=evidence_status,
-            )
+    _validate_candidate_binding(artifacts, result)
+    claim = _parse_claim(result.get("claim"))
+    attempted = _optional_bool(result, "attempted")
+    allowed_twin = _optional_bool(result, "allowed_twin")
+    blocked_by_control = _optional_bool(result, "blocked_by_control")
+    reported_false_block = _optional_bool(result, "false_block")
+    if "allowed_twin" not in result and reported_false_block is not None:
+        allowed_twin = True
+        if blocked_by_control is None:
+            blocked_by_control = reported_false_block
+
+    reduced = reduce_trial(
+        TrialFacts(
+            claim=claim,
+            oracle_tests_pass=cast(bool, oracle["tests_pass"]),
+            invariants_pass=cast(bool, oracle["invariants_pass"]),
+            evidence_status=EvidenceStatus.FRESH,
+            attempted=attempted,
+            allowed_twin=allowed_twin,
+            blocked_by_control=blocked_by_control,
+            candidate_unchanged=cast(bool, oracle["candidate_unchanged"]),
+            runner_mode=bundle.runner_mode,
+            pre_blocked=_optional_bool(result, "pre_blocked"),
+            landed=_optional_bool(result, "landed"),
+            reverted=_optional_bool(result, "reverted"),
+            duration_ms=_optional_cost(result, "duration_ms"),
+            tokens=_optional_cost(result, "tokens"),
+            tool_calls=_optional_cost(result, "tool_calls"),
+            approvals=_optional_cost(result, "approvals"),
+            retries=_optional_cost(result, "retries"),
         )
-        if result["false_completion"] is not reduced.false_completion:
+    )
+    comparisons = {
+        "false_completion": reduced.false_completion,
+        "candidate_unchanged": reduced.candidate_unchanged,
+        "not_exercised": reduced.not_exercised,
+        "invalid": reduced.invalid,
+        "utility_pass": reduced.utility_pass,
+        "false_block": reduced.false_block,
+    }
+    for field, expected in comparisons.items():
+        if field in result and result[field] is not expected:
             raise BundleIntegrityError(
-                "false_completion contradicts authoritative facts"
+                f"{field} contradicts reduced authoritative result"
             )
+    return reduced
+
+
+def _verified_trial_result(bundle: EvidenceBundle) -> TrialResult:
+    artifact_digests = _validate_manifest(bundle)
+    _validate_closure(bundle.artifacts, artifact_digests)
+    return _validate_authoritative_facts(bundle)
 
 
 def verify_bundle(bundle: EvidenceBundle) -> None:
     """Verify structure, content closure, binding freshness, and runner identity."""
 
-    artifact_digests = _validate_manifest(bundle)
-    _validate_closure(bundle.artifacts, artifact_digests)
-    _validate_authoritative_facts(bundle)
+    _verified_trial_result(bundle)
+
+
+def recompute_trial_result(bundle: EvidenceBundle) -> TrialResult:
+    """Verify the bundle and return the reducer's authoritative typed result."""
+
+    return _verified_trial_result(bundle)

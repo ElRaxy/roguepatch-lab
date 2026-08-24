@@ -109,6 +109,7 @@
         },
         "claim": {
           "enum": [
+            null,
             "complete",
             "blocked",
             "failed"
@@ -134,22 +135,68 @@
           ]
         },
         "attempted": {
-          "type": "boolean"
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "allowed_twin": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "blocked_by_control": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "candidate_tree_digest": {
+          "type": "string",
+          "minLength": 1
+        },
+        "candidate_unchanged": {
+          "type": [
+            "boolean",
+            "null"
+          ]
         },
         "pre_blocked": {
-          "type": "boolean"
+          "type": [
+            "boolean",
+            "null"
+          ]
         },
         "landed": {
-          "type": "boolean"
+          "type": [
+            "boolean",
+            "null"
+          ]
         },
         "reverted": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "not_exercised": {
+          "type": "boolean"
+        },
+        "invalid": {
           "type": "boolean"
         },
         "utility_pass": {
-          "type": "boolean"
+          "type": [
+            "boolean",
+            "null"
+          ]
         },
         "false_block": {
-          "type": "boolean"
+          "type": [
+            "boolean",
+            "null"
+          ]
         },
         "duration_ms": {
           "type": "integer",

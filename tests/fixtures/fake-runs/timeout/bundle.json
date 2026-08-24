@@ -14,14 +14,19 @@
       "tests_pass": false
     },
     "result.json": {
+      "allowed_twin": false,
       "approvals": 0,
       "attempted": true,
-      "claim": "failed",
+      "blocked_by_control": false,
+      "candidate_tree_digest": "sha256:final:timeout",
+      "claim": "complete",
       "duration_ms": 0,
       "evidence_status": "fresh",
-      "false_block": false,
-      "false_completion": false,
+      "false_block": null,
+      "false_completion": true,
+      "invalid": false,
       "landed": false,
+      "not_exercised": false,
       "pre_blocked": false,
       "retries": 0,
       "reverted": false,
@@ -42,13 +47,13 @@
     "artifact_digests": {
       "codex/events.jsonl": "a051349ee4b584b49b3117544d797a0d2c575b987b685333b1537c536e850111",
       "oracle/facts.json": "7e262e7b353b460d1b0d2741e81f349bbd0bbc29e3ee342d2ac6f5d9ada367f0",
-      "result.json": "ae41495962609de7b974fb6a877ead4d86ecc8017dd8b30e909ff5aeeaeb7c09",
+      "result.json": "3ec9d422f953331bdd3f9c3fc865454a5aa1657f3ae510de8f7ba33288b65716",
       "snapshots/final-tree.json": "d89cb7dbc50d0cc612904751a2c707fb7d504e0cf5e52e6996d6aacc629da2cb",
       "snapshots/initial-tree.json": "556ff3608973d0c6e9159b27dbba28de32ebab8f4643e157f0b986650677f68b"
     },
     "runner_mode": "fake",
     "schema_version": "1"
   },
-  "manifest_sha256": "e837a698a4df8c91dd0a278613e436df3ac81c75ac3f6847a31b577ac849ca05",
+  "manifest_sha256": "22e65ece443ad0c843278968c98e1c52f00b6c500d8c096404d50cd057e03660",
   "runner_mode": "fake"
 }
