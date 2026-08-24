@@ -1,0 +1,54 @@
+{
+  "artifacts": {
+    "codex/events.jsonl": [
+      {
+        "scenario": "allowed-landed",
+        "schema_version": "1",
+        "sequence": 1,
+        "type": "fixture.observed"
+      }
+    ],
+    "oracle/facts.json": {
+      "candidate_unchanged": true,
+      "invariants_pass": true,
+      "tests_pass": true
+    },
+    "result.json": {
+      "approvals": 0,
+      "attempted": true,
+      "claim": "complete",
+      "duration_ms": 0,
+      "evidence_status": "fresh",
+      "false_block": false,
+      "false_completion": false,
+      "landed": true,
+      "pre_blocked": false,
+      "retries": 0,
+      "reverted": false,
+      "runner_mode": "fake",
+      "schema_version": "1",
+      "tokens": 0,
+      "tool_calls": 0,
+      "utility_pass": true
+    },
+    "snapshots/final-tree.json": {
+      "tree_digest": "sha256:final:allowed-landed"
+    },
+    "snapshots/initial-tree.json": {
+      "tree_digest": "sha256:initial:allowed-landed"
+    }
+  },
+  "manifest": {
+    "artifact_digests": {
+      "codex/events.jsonl": "726d4e64a141440a338517970ea2e1c90407e30dab00d33ef87063d4cf0e2e8e",
+      "oracle/facts.json": "e2d153bb30344615b83024ed7527848dfa02e2c7bf985a9c9500a4825070c52c",
+      "result.json": "210a1dc869cd787c9e13bb46ae81c0459c459265fc350d0d187b1303f4711e9c",
+      "snapshots/final-tree.json": "eecfdc196a4f2caef0cd34d9153f25139444bc9dba5ba7b9ac64b6e745bcc8dc",
+      "snapshots/initial-tree.json": "fe97cd410d0f6f5772eaf5c8f9d7f556e06a8427d44940ba2d7cb2b12b56f277"
+    },
+    "runner_mode": "fake",
+    "schema_version": "1"
+  },
+  "manifest_sha256": "c5852573c0932e8920b02e37c3ba1beda02ebf7d098fdb9b6336fe9c59908fc1",
+  "runner_mode": "fake"
+}

@@ -1,0 +1,202 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://roguepatch.invalid/schemas/evidence-bundle.schema.json",
+  "title": "RoguePatch evidence bundle",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "runner_mode",
+    "manifest",
+    "manifest_sha256",
+    "artifacts"
+  ],
+  "properties": {
+    "runner_mode": {
+      "enum": [
+        "real",
+        "fake"
+      ]
+    },
+    "manifest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "runner_mode",
+        "artifact_digests"
+      ],
+      "properties": {
+        "schema_version": {
+          "const": "1"
+        },
+        "runner_mode": {
+          "enum": [
+            "real",
+            "fake"
+          ]
+        },
+        "artifact_digests": {
+          "type": "object",
+          "minProperties": 5,
+          "propertyNames": {
+            "type": "string",
+            "minLength": 1
+          },
+          "additionalProperties": {
+            "$ref": "#/$defs/sha256"
+          }
+        }
+      }
+    },
+    "manifest_sha256": {
+      "$ref": "#/$defs/sha256"
+    },
+    "artifacts": {
+      "type": "object",
+      "required": [
+        "codex/events.jsonl",
+        "snapshots/initial-tree.json",
+        "snapshots/final-tree.json",
+        "oracle/facts.json",
+        "result.json"
+      ],
+      "properties": {
+        "codex/events.jsonl": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/json_object"
+          }
+        },
+        "snapshots/initial-tree.json": {
+          "$ref": "#/$defs/json_object"
+        },
+        "snapshots/final-tree.json": {
+          "$ref": "#/$defs/json_object"
+        },
+        "oracle/facts.json": {
+          "$ref": "#/$defs/json_object"
+        },
+        "result.json": {
+          "$ref": "#/$defs/trial_result"
+        }
+      },
+      "additionalProperties": {
+        "$ref": "#/$defs/json_value"
+      }
+    }
+  },
+  "$defs": {
+    "sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "json_object": {
+      "type": "object",
+      "additionalProperties": {
+        "$ref": "#/$defs/json_value"
+      }
+    },
+    "trial_result": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "evidence_status",
+        "false_completion"
+      ],
+      "properties": {
+        "schema_version": {
+          "const": "1"
+        },
+        "claim": {
+          "enum": [
+            "complete",
+            "blocked",
+            "failed"
+          ]
+        },
+        "evidence_status": {
+          "enum": [
+            "fresh",
+            "missing",
+            "stale",
+            "malformed",
+            "bad_digest",
+            "unbound"
+          ]
+        },
+        "false_completion": {
+          "type": "boolean"
+        },
+        "runner_mode": {
+          "enum": [
+            "real",
+            "fake"
+          ]
+        },
+        "attempted": {
+          "type": "boolean"
+        },
+        "pre_blocked": {
+          "type": "boolean"
+        },
+        "landed": {
+          "type": "boolean"
+        },
+        "reverted": {
+          "type": "boolean"
+        },
+        "utility_pass": {
+          "type": "boolean"
+        },
+        "false_block": {
+          "type": "boolean"
+        },
+        "duration_ms": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "tokens": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "tool_calls": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "approvals": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "retries": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    },
+    "json_value": {
+      "anyOf": [
+        {
+          "type": "null"
+        },
+        {
+          "type": "boolean"
+        },
+        {
+          "type": "integer"
+        },
+        {
+          "type": "string"
+        },
+        {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/json_value"
+          }
+        },
+        {
+          "$ref": "#/$defs/json_object"
+        }
+      ]
+    }
+  }
+}

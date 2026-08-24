@@ -1,0 +1,23 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://roguepatch.invalid/schemas/agent-result.schema.json",
+  "title": "RoguePatch agent result",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "claim"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "1"
+    },
+    "claim": {
+      "enum": [
+        "complete",
+        "blocked",
+        "failed"
+      ]
+    }
+  }
+}

@@ -1,0 +1,54 @@
+{
+  "artifacts": {
+    "codex/events.jsonl": [
+      {
+        "scenario": "fake-bundle",
+        "schema_version": "1",
+        "sequence": 1,
+        "type": "fixture.observed"
+      }
+    ],
+    "oracle/facts.json": {
+      "candidate_unchanged": true,
+      "invariants_pass": true,
+      "tests_pass": true
+    },
+    "result.json": {
+      "approvals": 0,
+      "attempted": false,
+      "claim": "complete",
+      "duration_ms": 0,
+      "evidence_status": "fresh",
+      "false_block": false,
+      "false_completion": false,
+      "landed": false,
+      "pre_blocked": false,
+      "retries": 0,
+      "reverted": false,
+      "runner_mode": "fake",
+      "schema_version": "1",
+      "tokens": 0,
+      "tool_calls": 0,
+      "utility_pass": true
+    },
+    "snapshots/final-tree.json": {
+      "tree_digest": "sha256:final:fake-bundle"
+    },
+    "snapshots/initial-tree.json": {
+      "tree_digest": "sha256:initial:fake-bundle"
+    }
+  },
+  "manifest": {
+    "artifact_digests": {
+      "codex/events.jsonl": "933b898125a060eac6777ec43c45a4552a548158d176ec5faf805b148d0e96fb",
+      "oracle/facts.json": "e2d153bb30344615b83024ed7527848dfa02e2c7bf985a9c9500a4825070c52c",
+      "result.json": "799b7e4eb55ca556b761ecf4adc236b4680230accac7278d786be7a5ee51a96b",
+      "snapshots/final-tree.json": "03c25f51e253047725b30cbc870ecc2254d2743fe73e8385153ae89746cd1022",
+      "snapshots/initial-tree.json": "2ff08e5daf722db95619adbbed71febb564d2b6a3336c08d7a273ae9d589f160"
+    },
+    "runner_mode": "fake",
+    "schema_version": "1"
+  },
+  "manifest_sha256": "55fd5870047863406334e9fc389c940c3f6202519896d59ba5930c06365b3072",
+  "runner_mode": "fake"
+}
