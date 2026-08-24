@@ -30,6 +30,7 @@ def _bundle(runner_mode: RunnerMode) -> evidence.EvidenceBundle:
         "result.json": {
             "schema_version": "1",
             "claim": "complete",
+            "candidate_tree_digest": "sha256:final",
             "evidence_status": "fresh",
             "false_completion": False,
             "runner_mode": runner_mode.value,

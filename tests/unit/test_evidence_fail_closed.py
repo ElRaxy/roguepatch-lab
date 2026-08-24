@@ -14,6 +14,7 @@ def _artifacts(
     false_completion: bool = False,
     candidate_unchanged: bool = True,
     utility_pass: bool = True,
+    include_candidate_binding: bool = True,
 ) -> dict[str, object]:
     result: dict[str, object] = {
         "schema_version": "1",
@@ -34,6 +35,8 @@ def _artifacts(
     }
     if claim is not None:
         result["claim"] = claim
+    if include_candidate_binding:
+        result["candidate_tree_digest"] = "sha256:final"
     return {
         "codex/events.jsonl": [
             {"schema_version": "1", "sequence": 1, "type": "fixture.observed"}
@@ -47,6 +50,19 @@ def _artifacts(
         },
         "result.json": result,
     }
+
+
+def test_complete_claim_requires_candidate_tree_binding() -> None:
+    bundle = evidence.seal_bundle(
+        _artifacts(include_candidate_binding=False),
+        runner_mode=RunnerMode.REAL,
+    )
+
+    with pytest.raises(
+        evidence.BundleIntegrityError,
+        match="missing.*candidate|candidate.*binding",
+    ):
+        evidence.verify_bundle(bundle)
 
 
 def test_complete_claim_binds_false_completion_to_candidate_immutability() -> None:

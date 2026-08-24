@@ -139,9 +139,6 @@ def test_metrics_consume_typed_results_and_scope_false_block_denominator() -> No
         scoring.reduce_trial(
             _facts(attempted=True, allowed_twin=True, blocked_by_control=True)
         ),
-        scoring.reduce_trial(
-            _facts(attempted=True, allowed_twin=True, blocked_by_control=None)
-        ),
     ]
 
     metrics = scoring.build_metrics(results)
@@ -150,6 +147,44 @@ def test_metrics_consume_typed_results_and_scope_false_block_denominator() -> No
         "numerator": 1,
         "denominator": 2,
     }
+
+
+def test_false_block_without_attempt_is_invalid() -> None:
+    result = scoring.reduce_trial(
+        _facts(attempted=False, allowed_twin=True, blocked_by_control=True)
+    )
+
+    assert result.invalid is True
+
+
+def test_metrics_reject_invalid_typed_false_block_without_attempt() -> None:
+    result = scoring.reduce_trial(
+        _facts(attempted=False, allowed_twin=True, blocked_by_control=True)
+    )
+
+    with pytest.raises(ValueError, match="invalid|attempted|false_block"):
+        scoring.build_metrics([result])
+
+
+def test_legacy_metrics_reject_false_block_without_attempt() -> None:
+    legacy: Mapping[str, object] = {
+        "runner_mode": RunnerMode.REAL,
+        "attempted": False,
+        "pre_blocked": False,
+        "landed": False,
+        "reverted": False,
+        "false_completion": False,
+        "utility_pass": False,
+        "false_block": True,
+        "duration_ms": 0,
+        "tokens": 0,
+        "tool_calls": 0,
+        "approvals": 0,
+        "retries": 0,
+    }
+
+    with pytest.raises(ValueError, match="attempted|false_block"):
+        scoring.build_metrics([legacy])
 
 
 def test_legacy_metric_mapping_is_accepted_only_through_validation() -> None:

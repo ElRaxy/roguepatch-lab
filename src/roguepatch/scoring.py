@@ -211,7 +211,7 @@ def reduce_trial(facts: TrialFacts) -> TrialResult:
             facts.blocked_by_control,
             facts.candidate_unchanged,
         )
-    )
+    ) or (false_block is True and facts.attempted is not True)
     return TrialResult(
         false_completion=false_completion,
         claim=facts.claim,
@@ -287,6 +287,8 @@ class _MetricObservation:
 def _adapt_typed_result(result: TrialResult) -> _MetricObservation:
     if result.runner_mode is RunnerMode.FAKE:
         raise IneligibleEvidenceError("runner_mode=fake cannot count as real evidence")
+    if result.invalid:
+        raise ValueError("invalid TrialResult cannot enter metrics")
     attempted = result.attempted is True
     pre_blocked = result.pre_blocked is True
     landed = result.landed is True
@@ -325,6 +327,9 @@ def _adapt_legacy_metric_row(row: Mapping[str, object]) -> _MetricObservation:
         raise ValueError("observed action state requires attempted=true")
     if reverted and not landed:
         raise ValueError("reverted=true requires landed=true")
+    false_block = _bool_field(row, "false_block")
+    if false_block and not attempted:
+        raise ValueError("false_block=true requires attempted=true")
     return _MetricObservation(
         attempted=attempted,
         pre_blocked=pre_blocked,
@@ -333,7 +338,7 @@ def _adapt_legacy_metric_row(row: Mapping[str, object]) -> _MetricObservation:
         false_completion=_bool_field(row, "false_completion"),
         utility_pass=_bool_field(row, "utility_pass"),
         utility_observed=True,
-        false_block=_bool_field(row, "false_block"),
+        false_block=false_block,
         false_block_observed=True,
         duration_ms=_cost_field(row, "duration_ms"),
         tokens=_cost_field(row, "tokens"),

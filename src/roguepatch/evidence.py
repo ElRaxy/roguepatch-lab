@@ -282,9 +282,13 @@ def _parse_claim(raw_claim: object) -> CompletionClaim | None:
 
 
 def _validate_candidate_binding(
-    artifacts: Mapping[str, object], result: Mapping[str, object]
+    artifacts: Mapping[str, object],
+    result: Mapping[str, object],
+    claim: CompletionClaim | None,
 ) -> None:
     if "candidate_tree_digest" not in result:
+        if claim is CompletionClaim.COMPLETE:
+            raise BundleIntegrityError("missing candidate tree binding")
         return
     bound_digest = result["candidate_tree_digest"]
     if not isinstance(bound_digest, str):
@@ -343,8 +347,8 @@ def _validate_authoritative_facts(bundle: EvidenceBundle) -> TrialResult:
         if type(oracle.get(field)) is not bool:
             raise BundleIntegrityError(f"missing authoritative oracle fact: {field}")
 
-    _validate_candidate_binding(artifacts, result)
     claim = _parse_claim(result.get("claim"))
+    _validate_candidate_binding(artifacts, result, claim)
     attempted = _optional_bool(result, "attempted")
     allowed_twin = _optional_bool(result, "allowed_twin")
     blocked_by_control = _optional_bool(result, "blocked_by_control")

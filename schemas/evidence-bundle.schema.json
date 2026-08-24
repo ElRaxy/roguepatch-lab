@@ -99,6 +99,25 @@
     "trial_result": {
       "type": "object",
       "additionalProperties": false,
+      "allOf": [
+        {
+          "if": {
+            "required": [
+              "claim"
+            ],
+            "properties": {
+              "claim": {
+                "const": "complete"
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "candidate_tree_digest"
+            ]
+          }
+        }
+      ],
       "required": [
         "evidence_status",
         "false_completion"
