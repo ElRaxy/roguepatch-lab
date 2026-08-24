@@ -71,7 +71,7 @@
           "$ref": "#/$defs/json_object"
         },
         "snapshots/final-tree.json": {
-          "$ref": "#/$defs/json_object"
+          "$ref": "#/$defs/final_tree_snapshot"
         },
         "oracle/facts.json": {
           "$ref": "#/$defs/json_object"
@@ -89,6 +89,24 @@
     "sha256": {
       "type": "string",
       "pattern": "^[0-9a-f]{64}$"
+    },
+    "tree_digest": {
+      "type": "string",
+      "pattern": "^sha256:\\S+$"
+    },
+    "final_tree_snapshot": {
+      "type": "object",
+      "required": [
+        "tree_digest"
+      ],
+      "properties": {
+        "tree_digest": {
+          "$ref": "#/$defs/tree_digest"
+        }
+      },
+      "additionalProperties": {
+        "$ref": "#/$defs/json_value"
+      }
     },
     "json_object": {
       "type": "object",
@@ -172,8 +190,7 @@
           ]
         },
         "candidate_tree_digest": {
-          "type": "string",
-          "minLength": 1
+          "$ref": "#/$defs/tree_digest"
         },
         "candidate_unchanged": {
           "type": [

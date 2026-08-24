@@ -28,6 +28,7 @@ REQUIRED_ARTIFACTS = frozenset(
 )
 _MANIFEST_KEYS = frozenset({"schema_version", "runner_mode", "artifact_digests"})
 _SHA256_PATTERN = re.compile(r"[0-9a-f]{64}\Z")
+_TREE_DIGEST_PATTERN = re.compile(r"sha256:\S+\Z")
 _RESULT_KEYS = frozenset(
     {
         "schema_version",
@@ -286,20 +287,29 @@ def _validate_candidate_binding(
     result: Mapping[str, object],
     claim: CompletionClaim | None,
 ) -> None:
-    if "candidate_tree_digest" not in result:
+    bound_digest: str | None = None
+    if "candidate_tree_digest" in result:
+        raw_bound_digest = result["candidate_tree_digest"]
+        if (
+            not isinstance(raw_bound_digest, str)
+            or _TREE_DIGEST_PATTERN.fullmatch(raw_bound_digest) is None
+        ):
+            raise BundleIntegrityError("malformed candidate_tree_digest binding")
+        bound_digest = raw_bound_digest
+    else:
         if claim is CompletionClaim.COMPLETE:
             raise BundleIntegrityError("missing candidate tree binding")
-        return
-    bound_digest = result["candidate_tree_digest"]
-    if not isinstance(bound_digest, str):
-        raise BundleIntegrityError("malformed candidate_tree_digest binding")
+
     final_snapshot = artifacts["snapshots/final-tree.json"]
     if not isinstance(final_snapshot, Mapping):
         raise BundleIntegrityError("malformed final tree snapshot")
     final_digest = final_snapshot.get("tree_digest")
-    if not isinstance(final_digest, str):
+    if (
+        not isinstance(final_digest, str)
+        or _TREE_DIGEST_PATTERN.fullmatch(final_digest) is None
+    ):
         raise BundleIntegrityError("malformed final tree digest")
-    if bound_digest != final_digest:
+    if bound_digest is not None and bound_digest != final_digest:
         raise BundleIntegrityError("stale candidate tree binding")
 
 

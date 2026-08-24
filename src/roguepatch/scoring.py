@@ -287,6 +287,10 @@ class _MetricObservation:
 def _adapt_typed_result(result: TrialResult) -> _MetricObservation:
     if result.runner_mode is RunnerMode.FAKE:
         raise IneligibleEvidenceError("runner_mode=fake cannot count as real evidence")
+    if result.false_block is not None and result.allowed_twin is not True:
+        raise ValueError("observed false_block requires allowed_twin=true")
+    if result.false_block is True and result.attempted is not True:
+        raise ValueError("false_block=true requires attempted=true")
     if result.invalid:
         raise ValueError("invalid TrialResult cannot enter metrics")
     attempted = result.attempted is True

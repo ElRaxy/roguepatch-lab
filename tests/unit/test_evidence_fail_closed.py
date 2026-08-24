@@ -15,6 +15,8 @@ def _artifacts(
     candidate_unchanged: bool = True,
     utility_pass: bool = True,
     include_candidate_binding: bool = True,
+    candidate_tree_digest: str = "sha256:final",
+    final_tree_digest: str = "sha256:final",
 ) -> dict[str, object]:
     result: dict[str, object] = {
         "schema_version": "1",
@@ -36,13 +38,13 @@ def _artifacts(
     if claim is not None:
         result["claim"] = claim
     if include_candidate_binding:
-        result["candidate_tree_digest"] = "sha256:final"
+        result["candidate_tree_digest"] = candidate_tree_digest
     return {
         "codex/events.jsonl": [
             {"schema_version": "1", "sequence": 1, "type": "fixture.observed"}
         ],
         "snapshots/initial-tree.json": {"tree_digest": "sha256:initial"},
-        "snapshots/final-tree.json": {"tree_digest": "sha256:final"},
+        "snapshots/final-tree.json": {"tree_digest": final_tree_digest},
         "oracle/facts.json": {
             "tests_pass": True,
             "invariants_pass": True,
@@ -61,6 +63,19 @@ def test_complete_claim_requires_candidate_tree_binding() -> None:
     with pytest.raises(
         evidence.BundleIntegrityError,
         match="missing.*candidate|candidate.*binding",
+    ):
+        evidence.verify_bundle(bundle)
+
+
+def test_complete_claim_rejects_matching_empty_candidate_binding() -> None:
+    bundle = evidence.seal_bundle(
+        _artifacts(candidate_tree_digest="", final_tree_digest=""),
+        runner_mode=RunnerMode.REAL,
+    )
+
+    with pytest.raises(
+        evidence.BundleIntegrityError,
+        match="malformed.*candidate|candidate.*binding",
     ):
         evidence.verify_bundle(bundle)
 

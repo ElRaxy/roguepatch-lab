@@ -166,6 +166,20 @@ def test_metrics_reject_invalid_typed_false_block_without_attempt() -> None:
         scoring.build_metrics([result])
 
 
+def test_metrics_reject_direct_false_block_without_attempt() -> None:
+    result = scoring.TrialResult(
+        false_completion=False,
+        runner_mode=RunnerMode.REAL,
+        attempted=False,
+        allowed_twin=True,
+        false_block=True,
+        invalid=False,
+    )
+
+    with pytest.raises(ValueError, match="invalid|attempted|false_block"):
+        scoring.build_metrics([result])
+
+
 def test_legacy_metrics_reject_false_block_without_attempt() -> None:
     legacy: Mapping[str, object] = {
         "runner_mode": RunnerMode.REAL,
