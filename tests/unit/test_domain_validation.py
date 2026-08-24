@@ -79,6 +79,34 @@ def test_request_observations_are_detached_from_caller_mutation(
 
 
 @pytest.mark.parametrize("mutation_depth", ["root", "nested"])
+def test_direct_action_facts_detach_request_from_caller_mutation(
+    mutation_depth: str,
+) -> None:
+    request = _request_observation()
+    expected_request = _request_observation()
+    facts = ActionFacts(
+        request=request,
+        decision=Decision.UNOBSERVED,
+        execution=ExecutionState.UNOBSERVED,
+        effect=EffectState.UNOBSERVED,
+        remediation=Remediation.UNOBSERVED,
+        outcome=None,
+        contained=None,
+        pre_blocked=None,
+        reverted=None,
+    )
+
+    if mutation_depth == "root":
+        request["target"] = "mutated-root.txt"
+    else:
+        metadata = request["metadata"]
+        assert isinstance(metadata, dict)
+        metadata["resolved_target"] = "mutated-nested.txt"
+
+    assert facts.request == expected_request
+
+
+@pytest.mark.parametrize("mutation_depth", ["root", "nested"])
 def test_snapshot_observations_are_detached_from_caller_mutation(
     mutation_depth: str,
 ) -> None:
@@ -130,26 +158,57 @@ def test_domain_records_enforce_frozen_slots(instance: object, field_name: str) 
 
 
 @pytest.mark.parametrize(
-    ("receipt", "execution", "effect"),
+    ("receipt", "decision", "execution", "effect", "remediation"),
     [
-        ({"source": "native-control"}, None, None),
-        (None, ExecutionState.STARTED, None),
-        (None, None, EffectState.LANDED),
+        ({"source": "native-control"}, None, None, None, None),
+        (None, None, ExecutionState.STARTED, None, None),
+        (None, None, None, EffectState.LANDED, None),
+        (None, Decision.DENY, None, None, None),
+        (None, None, None, None, Remediation.CONTROL_REVERTED),
     ],
 )
 def test_no_request_with_action_evidence_is_invalid(
     receipt: dict[str, str] | None,
+    decision: Decision | None,
     execution: ExecutionState | None,
     effect: EffectState | None,
+    remediation: Remediation | None,
 ) -> None:
     result = normalize_action(
         ActionSources(
             request=None,
             receipt=receipt,
             snapshots=(),
+            decision=decision,
             execution=execution,
             effect=effect,
+            remediation=remediation,
         )
     )
 
     assert result.outcome is ActionOutcome.INVALID
+
+
+@pytest.mark.parametrize(
+    ("decision", "remediation"),
+    [
+        (Decision.UNOBSERVED, None),
+        (Decision.NOT_APPLICABLE, None),
+        (None, Remediation.UNOBSERVED),
+    ],
+)
+def test_no_request_with_non_evidence_markers_is_not_exercised(
+    decision: Decision | None,
+    remediation: Remediation | None,
+) -> None:
+    result = normalize_action(
+        ActionSources(
+            request=None,
+            receipt=None,
+            snapshots=(),
+            decision=decision,
+            remediation=remediation,
+        )
+    )
+
+    assert result.outcome is ActionOutcome.NOT_EXERCISED

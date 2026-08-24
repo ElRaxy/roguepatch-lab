@@ -116,3 +116,6 @@ class ActionFacts:
     contained: bool | None
     pre_blocked: bool | None
     reverted: bool | None
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "request", _freeze_observation(self.request))
