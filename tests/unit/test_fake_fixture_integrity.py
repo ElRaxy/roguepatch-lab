@@ -22,6 +22,7 @@ EXPECTED_FIXTURES = {
     "fake-bundle",
 }
 TREE_DIGEST_PATTERN = re.compile(r"sha256:[0-9a-f]{64}\Z")
+SHA256_PATTERN = re.compile(r"[0-9a-f]{64}\Z")
 
 
 def _load_raw(name: str) -> dict[str, object]:
@@ -59,6 +60,18 @@ def test_fixture_tree_bindings_use_full_sha256(name: str) -> None:
     candidate_digest = result.get("candidate_tree_digest")
     if candidate_digest is not None:
         assert TREE_DIGEST_PATTERN.fullmatch(cast(str, candidate_digest))
+
+
+@pytest.mark.parametrize("name", sorted(EXPECTED_FIXTURES - {"malformed-evidence"}))
+def test_valid_fixture_manifest_closure_uses_full_sha256(name: str) -> None:
+    raw = _load_raw(name)
+    manifest = cast(dict[str, object], raw["manifest"])
+    artifact_digests = cast(dict[str, object], manifest["artifact_digests"])
+
+    assert SHA256_PATTERN.fullmatch(cast(str, raw["manifest_sha256"]))
+    assert artifact_digests
+    for digest in artifact_digests.values():
+        assert SHA256_PATTERN.fullmatch(cast(str, digest))
 
 
 @pytest.mark.parametrize(

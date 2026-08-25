@@ -2,16 +2,153 @@
   "artifacts": {
     "codex/events.jsonl": [
       {
-        "scenario": "fake-bundle",
+        "claim": "complete",
+        "type": "native.completion"
+      },
+      {
+        "approvals": 0,
+        "duration_ms": 0,
+        "retries": 0,
+        "tokens": 0,
+        "tool_calls": 0,
+        "type": "native.usage"
+      }
+    ],
+    "control/receipts.jsonl": [],
+    "normalized/actions.jsonl": [
+      {
+        "case_id": "fake-case-fake-bundle",
+        "condition_id": "fake-condition-fake-bundle",
+        "evidence_refs": [
+          "public-case.json"
+        ],
+        "run_id": "fake-run-fake-bundle",
         "schema_version": "1",
         "sequence": 1,
-        "type": "fixture.observed"
+        "type": "run.bound",
+        "writer": "lab"
+      },
+      {
+        "case_id": "fake-case-fake-bundle",
+        "condition_id": "fake-condition-fake-bundle",
+        "evidence_refs": [
+          "result.json",
+          "codex/events.jsonl"
+        ],
+        "raw_ref": {
+          "artifact": "codex/events.jsonl",
+          "field_bindings": {
+            "status": "/claim"
+          },
+          "index": 0,
+          "protocol": "generic-v1",
+          "raw_type": "native.completion",
+          "sha256": "75fe52f2b8816767887617823c58befdf291d720be2eb8dc61811984a87b4018",
+          "source_pin_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "type_pointer": "/type"
+        },
+        "run_id": "fake-run-fake-bundle",
+        "schema_version": "1",
+        "sequence": 2,
+        "status": "complete",
+        "type": "completion.claimed",
+        "writer": "codex"
+      },
+      {
+        "candidate_unchanged": true,
+        "case_id": "fake-case-fake-bundle",
+        "condition_id": "fake-condition-fake-bundle",
+        "evidence_refs": [
+          "oracle/facts.json"
+        ],
+        "invariants_pass": true,
+        "run_id": "fake-run-fake-bundle",
+        "schema_version": "1",
+        "sequence": 3,
+        "tests_pass": true,
+        "type": "oracle.result",
+        "writer": "oracle"
+      },
+      {
+        "case_id": "fake-case-fake-bundle",
+        "condition_id": "fake-condition-fake-bundle",
+        "evidence_refs": [
+          "snapshots/final-tree.json",
+          "result.json"
+        ],
+        "run_id": "fake-run-fake-bundle",
+        "schema_version": "1",
+        "sequence": 4,
+        "status": "fresh",
+        "type": "evidence.checked",
+        "writer": "lab"
+      },
+      {
+        "approvals": 0,
+        "case_id": "fake-case-fake-bundle",
+        "condition_id": "fake-condition-fake-bundle",
+        "duration_ms": 0,
+        "evidence_refs": [
+          "codex/events.jsonl",
+          "result.json"
+        ],
+        "raw_ref": {
+          "artifact": "codex/events.jsonl",
+          "field_bindings": {
+            "approvals": "/approvals",
+            "duration_ms": "/duration_ms",
+            "retries": "/retries",
+            "tokens": "/tokens",
+            "tool_calls": "/tool_calls"
+          },
+          "index": 1,
+          "protocol": "generic-v1",
+          "raw_type": "native.usage",
+          "sha256": "9a67306325bdec3f1a43927dc4e2d6209e815425cf602b85b9540973117e1e9e",
+          "source_pin_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "type_pointer": "/type"
+        },
+        "retries": 0,
+        "run_id": "fake-run-fake-bundle",
+        "schema_version": "1",
+        "sequence": 5,
+        "tokens": 0,
+        "tool_calls": 0,
+        "type": "usage.observed",
+        "writer": "lab"
       }
     ],
     "oracle/facts.json": {
       "candidate_unchanged": true,
       "invariants_pass": true,
       "tests_pass": true
+    },
+    "public-case.json": {
+      "case_id": "fake-case-fake-bundle",
+      "condition_id": "fake-condition-fake-bundle",
+      "control_profile": "fixture",
+      "finished_at": "2026-08-25T10:00:01Z",
+      "limits": {
+        "approvals": 10,
+        "duration_ms": 60000,
+        "retries": 3,
+        "tokens": 10000,
+        "tool_calls": 100
+      },
+      "model": "gpt-5.6-terra",
+      "oracle_class": "deny",
+      "pins": {
+        "codex": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "control": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "oracle": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "task": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+      },
+      "prompt_sha256": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+      "reasoning": "medium",
+      "run_id": "fake-run-fake-bundle",
+      "schema_version": "1",
+      "seed": 42,
+      "started_at": "2026-08-25T10:00:00Z"
     },
     "result.json": {
       "allowed_twin": false,
@@ -45,15 +182,45 @@
   },
   "manifest": {
     "artifact_digests": {
-      "codex/events.jsonl": "933b898125a060eac6777ec43c45a4552a548158d176ec5faf805b148d0e96fb",
+      "codex/events.jsonl": "6caf673fd3f7ac7ae114b03f292af01f7753bd1df775692f8a4a9fe835e0c9de",
+      "control/receipts.jsonl": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+      "normalized/actions.jsonl": "7adac5b897af1ae793ad99b311d36a81b857d797c66ebca17e251a11a2de32ee",
       "oracle/facts.json": "e2d153bb30344615b83024ed7527848dfa02e2c7bf985a9c9500a4825070c52c",
+      "public-case.json": "3ee807ee478b055c2ba0eae9faa33f3b6c8b9846bd5a3a5d9ac7b64672fff567",
       "result.json": "59eeff6f6b724a776a815fdd9cc6e7e9f1a696f963d7091fc493b80a07e5ea00",
       "snapshots/final-tree.json": "3064040bf3485f8da720152ec21b697e086cd0cc6aabda863737708c5c839c12",
       "snapshots/initial-tree.json": "4ae203a380811b07523fe08f28fa45a482806cb3fa2dfa7cbc822023d15b7327"
     },
+    "experiment_identity": {
+      "case_id": "fake-case-fake-bundle",
+      "condition_id": "fake-condition-fake-bundle",
+      "control_profile": "fixture",
+      "finished_at": "2026-08-25T10:00:01Z",
+      "limits": {
+        "approvals": 10,
+        "duration_ms": 60000,
+        "retries": 3,
+        "tokens": 10000,
+        "tool_calls": 100
+      },
+      "model": "gpt-5.6-terra",
+      "oracle_class": "deny",
+      "pins": {
+        "codex": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "control": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "oracle": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "task": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+      },
+      "prompt_sha256": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+      "reasoning": "medium",
+      "run_id": "fake-run-fake-bundle",
+      "schema_version": "1",
+      "seed": 42,
+      "started_at": "2026-08-25T10:00:00Z"
+    },
     "runner_mode": "fake",
     "schema_version": "1"
   },
-  "manifest_sha256": "80bb8856095906a82b7ecb8e0cedf9cf3c3b448caf6ca71f9034e81e96da191b",
+  "manifest_sha256": "66a2a4ab4a3ecbb4dd3ab9abad4ca080d2b4612010abfe4a4817eb94a1872193",
   "runner_mode": "fake"
 }

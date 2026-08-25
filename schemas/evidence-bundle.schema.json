@@ -45,6 +45,9 @@
           "additionalProperties": {
             "$ref": "#/$defs/sha256"
           }
+        },
+        "experiment_identity": {
+          "$ref": "#/$defs/public_case"
         }
       }
     },
@@ -62,6 +65,21 @@
       ],
       "properties": {
         "codex/events.jsonl": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/json_object"
+          }
+        },
+        "public-case.json": {
+          "$ref": "#/$defs/json_object"
+        },
+        "control/receipts.jsonl": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/json_object"
+          }
+        },
+        "normalized/actions.jsonl": {
           "type": "array",
           "items": {
             "$ref": "#/$defs/json_object"
@@ -85,6 +103,113 @@
       }
     }
   },
+  "allOf": [
+    {
+      "if": {
+        "required": [
+          "artifacts"
+        ],
+        "properties": {
+          "artifacts": {
+            "required": [
+              "result.json"
+            ],
+            "properties": {
+              "result.json": {
+                "required": [
+                  "claim"
+                ],
+                "properties": {
+                  "claim": {
+                    "enum": [
+                      "complete",
+                      "blocked",
+                      "failed"
+                    ]
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "manifest": {
+            "required": [
+              "experiment_identity"
+            ]
+          },
+          "artifacts": {
+            "required": [
+              "public-case.json",
+              "control/receipts.jsonl",
+              "normalized/actions.jsonl"
+            ],
+            "properties": {
+              "public-case.json": {
+                "$ref": "#/$defs/public_case"
+              },
+              "normalized/actions.jsonl": {
+                "minItems": 1,
+                "prefixItems": [
+                  {
+                    "allOf": [
+                      {
+                        "$ref": "#/$defs/claimed_event"
+                      },
+                      {
+                        "required": [
+                          "type"
+                        ],
+                        "properties": {
+                          "type": {
+                            "const": "run.bound"
+                          }
+                        }
+                      }
+                    ]
+                  }
+                ],
+                "items": {
+                  "$ref": "#/$defs/claimed_event"
+                },
+                "contains": {
+                  "required": [
+                    "type"
+                  ],
+                  "properties": {
+                    "type": {
+                      "const": "run.bound"
+                    }
+                  }
+                },
+                "minContains": 1,
+                "maxContains": 1
+              },
+              "snapshots/final-tree.json": {
+                "$ref": "#/$defs/claimed_final_tree_snapshot"
+              },
+              "result.json": {
+                "$ref": "#/$defs/claimed_trial_result"
+              }
+            }
+          }
+        }
+      },
+      "else": {
+        "properties": {
+          "manifest": {
+            "not": {
+              "required": [
+                "experiment_identity"
+              ]
+            }
+          }
+        }
+      }
+    }
+  ],
   "$defs": {
     "sha256": {
       "type": "string",
@@ -94,7 +219,25 @@
       "type": "string",
       "pattern": "^sha256:[0-9a-f]{64}$"
     },
+    "legacy_tree_digest": {
+      "type": "string",
+      "pattern": "^sha256:\\S+$"
+    },
     "final_tree_snapshot": {
+      "type": "object",
+      "required": [
+        "tree_digest"
+      ],
+      "properties": {
+        "tree_digest": {
+          "$ref": "#/$defs/legacy_tree_digest"
+        }
+      },
+      "additionalProperties": {
+        "$ref": "#/$defs/json_value"
+      }
+    },
+    "claimed_final_tree_snapshot": {
       "type": "object",
       "required": [
         "tree_digest"
@@ -112,6 +255,700 @@
       "type": "object",
       "additionalProperties": {
         "$ref": "#/$defs/json_value"
+      }
+    },
+    "raw_ref": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "protocol",
+        "artifact",
+        "index",
+        "sha256",
+        "raw_type",
+        "type_pointer",
+        "field_bindings",
+        "source_pin_sha256"
+      ],
+      "properties": {
+        "protocol": {
+          "type": "string",
+          "pattern": "^(?:generic-v1|source-sha256:[0-9a-f]{64})$"
+        },
+        "artifact": {
+          "enum": [
+            "codex/events.jsonl",
+            "control/receipts.jsonl"
+          ]
+        },
+        "index": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "raw_type": {
+          "type": "string",
+          "minLength": 1
+        },
+        "type_pointer": {
+          "$ref": "#/$defs/json_pointer"
+        },
+        "field_bindings": {
+          "type": "object",
+          "minProperties": 1,
+          "additionalProperties": {
+            "$ref": "#/$defs/json_pointer"
+          }
+        },
+        "source_pin_sha256": {
+          "$ref": "#/$defs/sha256"
+        }
+      }
+    },
+    "json_pointer": {
+      "type": "string",
+      "pattern": "^/(?:[^~/]|~[01])+(?:/(?:[^~/]|~[01])+)*$"
+    },
+    "claimed_event": {
+      "type": "object",
+      "required": [
+        "schema_version",
+        "sequence",
+        "type",
+        "run_id",
+        "case_id",
+        "condition_id",
+        "writer",
+        "evidence_refs"
+      ],
+      "properties": {
+        "schema_version": {
+          "const": "1"
+        },
+        "sequence": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "type": {
+          "enum": [
+            "run.bound",
+            "action.requested",
+            "control.decided",
+            "execution.finished",
+            "effect.observed",
+            "rollback.observed",
+            "completion.claimed",
+            "oracle.result",
+            "evidence.checked",
+            "usage.observed"
+          ]
+        },
+        "run_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "case_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "condition_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "writer": {
+          "enum": [
+            "lab",
+            "codex",
+            "control",
+            "oracle"
+          ]
+        },
+        "evidence_refs": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "raw_ref": {
+          "$ref": "#/$defs/raw_ref"
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "type": {
+                "enum": [
+                  "action.requested",
+                  "control.decided",
+                  "execution.finished",
+                  "completion.claimed",
+                  "usage.observed"
+                ]
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "raw_ref"
+            ]
+          },
+          "else": {
+            "not": {
+              "required": [
+                "raw_ref"
+              ]
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "type": {
+                "const": "action.requested"
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "action_id",
+              "oracle_class"
+            ],
+            "properties": {
+              "raw_ref": {
+                "$ref": "#/$defs/action_request_raw_ref"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "type": {
+                "const": "control.decided"
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "action_id",
+              "decision"
+            ],
+            "properties": {
+              "raw_ref": {
+                "$ref": "#/$defs/control_decision_raw_ref"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "type": {
+                "const": "execution.finished"
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "action_id",
+              "started"
+            ],
+            "properties": {
+              "raw_ref": {
+                "$ref": "#/$defs/execution_raw_ref"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "type": {
+                "const": "completion.claimed"
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "status"
+            ],
+            "not": {
+              "required": [
+                "claim"
+              ]
+            },
+            "properties": {
+              "raw_ref": {
+                "$ref": "#/$defs/completion_raw_ref"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "type": {
+                "const": "usage.observed"
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "duration_ms",
+              "tokens",
+              "tool_calls",
+              "approvals",
+              "retries"
+            ],
+            "properties": {
+              "raw_ref": {
+                "$ref": "#/$defs/usage_raw_ref"
+              }
+            }
+          }
+        }
+      ],
+      "additionalProperties": {
+        "$ref": "#/$defs/json_value"
+      }
+    },
+    "action_request_raw_ref": {
+      "$ref": "#/$defs/raw_ref",
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "protocol": {
+                "const": "generic-v1"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "raw_type": {
+                "const": "native.tool.request"
+              },
+              "type_pointer": {
+                "const": "/type"
+              },
+              "field_bindings": {
+                "properties": {
+                  "action_id": {
+                    "const": "/action_id"
+                  }
+                }
+              }
+            }
+          }
+        }
+      ],
+      "properties": {
+        "artifact": {
+          "const": "codex/events.jsonl"
+        },
+        "field_bindings": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "action_id"
+          ],
+          "properties": {
+            "action_id": {
+              "$ref": "#/$defs/json_pointer"
+            }
+          }
+        }
+      }
+    },
+    "control_decision_raw_ref": {
+      "$ref": "#/$defs/raw_ref",
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "protocol": {
+                "const": "generic-v1"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "raw_type": {
+                "const": "control.receipt"
+              },
+              "type_pointer": {
+                "const": "/type"
+              },
+              "field_bindings": {
+                "properties": {
+                  "action_id": {
+                    "const": "/action_id"
+                  },
+                  "decision": {
+                    "const": "/decision"
+                  }
+                }
+              }
+            }
+          }
+        }
+      ],
+      "properties": {
+        "artifact": {
+          "const": "control/receipts.jsonl"
+        },
+        "field_bindings": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "action_id",
+            "decision"
+          ],
+          "properties": {
+            "action_id": {
+              "$ref": "#/$defs/json_pointer"
+            },
+            "decision": {
+              "$ref": "#/$defs/json_pointer"
+            }
+          }
+        }
+      }
+    },
+    "execution_raw_ref": {
+      "$ref": "#/$defs/raw_ref",
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "protocol": {
+                "const": "generic-v1"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "raw_type": {
+                "const": "native.execution"
+              },
+              "type_pointer": {
+                "const": "/type"
+              },
+              "field_bindings": {
+                "properties": {
+                  "action_id": {
+                    "const": "/action_id"
+                  },
+                  "started": {
+                    "const": "/started"
+                  }
+                }
+              }
+            }
+          }
+        }
+      ],
+      "properties": {
+        "artifact": {
+          "const": "codex/events.jsonl"
+        },
+        "field_bindings": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "action_id",
+            "started"
+          ],
+          "properties": {
+            "action_id": {
+              "$ref": "#/$defs/json_pointer"
+            },
+            "started": {
+              "$ref": "#/$defs/json_pointer"
+            }
+          }
+        }
+      }
+    },
+    "completion_raw_ref": {
+      "$ref": "#/$defs/raw_ref",
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "protocol": {
+                "const": "generic-v1"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "raw_type": {
+                "const": "native.completion"
+              },
+              "type_pointer": {
+                "const": "/type"
+              },
+              "field_bindings": {
+                "properties": {
+                  "status": {
+                    "const": "/claim"
+                  }
+                }
+              }
+            }
+          }
+        }
+      ],
+      "properties": {
+        "artifact": {
+          "const": "codex/events.jsonl"
+        },
+        "field_bindings": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "status"
+          ],
+          "properties": {
+            "status": {
+              "$ref": "#/$defs/json_pointer"
+            }
+          }
+        }
+      }
+    },
+    "usage_raw_ref": {
+      "$ref": "#/$defs/raw_ref",
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "protocol": {
+                "const": "generic-v1"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "raw_type": {
+                "const": "native.usage"
+              },
+              "type_pointer": {
+                "const": "/type"
+              },
+              "field_bindings": {
+                "properties": {
+                  "duration_ms": {
+                    "const": "/duration_ms"
+                  },
+                  "tokens": {
+                    "const": "/tokens"
+                  },
+                  "tool_calls": {
+                    "const": "/tool_calls"
+                  },
+                  "approvals": {
+                    "const": "/approvals"
+                  },
+                  "retries": {
+                    "const": "/retries"
+                  }
+                }
+              }
+            }
+          }
+        }
+      ],
+      "properties": {
+        "artifact": {
+          "const": "codex/events.jsonl"
+        },
+        "field_bindings": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "duration_ms",
+            "tokens",
+            "tool_calls",
+            "approvals",
+            "retries"
+          ],
+          "properties": {
+            "duration_ms": {
+              "$ref": "#/$defs/json_pointer"
+            },
+            "tokens": {
+              "$ref": "#/$defs/json_pointer"
+            },
+            "tool_calls": {
+              "$ref": "#/$defs/json_pointer"
+            },
+            "approvals": {
+              "$ref": "#/$defs/json_pointer"
+            },
+            "retries": {
+              "$ref": "#/$defs/json_pointer"
+            }
+          }
+        }
+      }
+    },
+    "public_case": {
+      "type": "object",
+      "required": [
+        "schema_version",
+        "run_id",
+        "case_id",
+        "condition_id",
+        "control_profile",
+        "oracle_class",
+        "model",
+        "reasoning",
+        "prompt_sha256",
+        "seed",
+        "limits",
+        "pins",
+        "started_at",
+        "finished_at"
+      ],
+      "properties": {
+        "schema_version": {
+          "const": "1"
+        },
+        "run_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "case_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "condition_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "control_profile": {
+          "type": "string",
+          "minLength": 1
+        },
+        "oracle_class": {
+          "enum": [
+            "allow_auto",
+            "deny"
+          ]
+        },
+        "model": {
+          "type": "string",
+          "minLength": 1
+        },
+        "reasoning": {
+          "type": "string",
+          "minLength": 1
+        },
+        "prompt_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "seed": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "limits": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "duration_ms",
+            "tokens",
+            "tool_calls",
+            "approvals",
+            "retries"
+          ],
+          "properties": {
+            "duration_ms": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            },
+            "tokens": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            },
+            "tool_calls": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            },
+            "approvals": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            },
+            "retries": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            }
+          }
+        },
+        "pins": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "codex",
+            "control",
+            "oracle",
+            "task"
+          ],
+          "properties": {
+            "codex": {
+              "$ref": "#/$defs/sha256"
+            },
+            "control": {
+              "$ref": "#/$defs/sha256"
+            },
+            "oracle": {
+              "$ref": "#/$defs/sha256"
+            },
+            "task": {
+              "$ref": "#/$defs/sha256"
+            }
+          }
+        },
+        "started_at": {
+          "type": "string",
+          "format": "date-time",
+          "minLength": 1
+        },
+        "finished_at": {
+          "type": "string",
+          "format": "date-time",
+          "minLength": 1
+        }
+      },
+      "additionalProperties": false
+    },
+    "claimed_trial_result": {
+      "$comment": "Schema-valid claimed evidence is not necessarily countable; runtime verification decides countability.",
+      "type": "object",
+      "required": [
+        "schema_version",
+        "claim",
+        "runner_mode",
+        "candidate_tree_digest"
+      ],
+      "properties": {
+        "candidate_tree_digest": {
+          "$ref": "#/$defs/tree_digest"
+        }
       }
     },
     "trial_result": {
@@ -190,7 +1027,7 @@
           ]
         },
         "candidate_tree_digest": {
-          "$ref": "#/$defs/tree_digest"
+          "$ref": "#/$defs/legacy_tree_digest"
         },
         "candidate_unchanged": {
           "type": [

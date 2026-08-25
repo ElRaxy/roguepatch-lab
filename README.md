@@ -6,7 +6,9 @@ The initial scope is deliberately narrow: six synthetic cases and three control 
 
 ## Current status
 
-Bootstrap only. No live trials have run, and this repository contains no experimental results. Docker, Docker Sandboxes, external controls, remote publication, and live model calls remain behind human gates.
+The local core now includes the typed domain, sealed evidence verification, deterministic replay/reporting, and preview versus verified metric reducers. No live trials have run, and this repository contains no experimental results. Docker, Docker Sandboxes, external controls, remote publication, and live model calls remain behind human gates.
+
+F2 treats experiment pins as opaque SHA-256 commitments and verifies that normalized source references carry the matching commitment. Constructing those commitments from tool surfaces, images, or fixtures—and comparing them before a run—belongs to the producer/F5 boundary; F2 does not claim to prove that composition.
 
 ## Design constraints
 
@@ -28,4 +30,4 @@ uv run ruff check src tests
 uv run mypy src
 ```
 
-The `src/` package and tests will be added feature by feature after their acceptance tests are frozen. Live execution is not part of this bootstrap.
+The local implementation and its frozen acceptance tests are developed feature by feature. Live execution is outside the current local-core scope.

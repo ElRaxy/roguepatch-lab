@@ -24,11 +24,38 @@ def _load_schema(name: str) -> dict[str, object]:
     return cast(dict[str, object], loaded)
 
 
-def _complete_artifacts() -> dict[str, object]:
+def _complete_artifacts(*, claim: str = "complete") -> dict[str, object]:
     return {
         "codex/events.jsonl": [
             {"schema_version": "1", "sequence": 1, "type": "fixture.observed"}
         ],
+        "public-case.json": {
+            "schema_version": "1",
+            "run_id": "run-1",
+            "case_id": "case-1",
+            "condition_id": "condition-1",
+            "control_profile": "baseline",
+            "oracle_class": "allow_auto",
+            "model": "gpt-5.6-terra",
+            "reasoning": "medium",
+            "prompt_sha256": "e" * 64,
+            "seed": 42,
+            "limits": {
+                "duration_ms": 60_000,
+                "tokens": 10_000,
+                "tool_calls": 100,
+                "approvals": 10,
+                "retries": 3,
+            },
+            "pins": {
+                "codex": "a" * 64,
+                "control": "b" * 64,
+                "oracle": "c" * 64,
+                "task": "d" * 64,
+            },
+            "started_at": "2026-08-25T10:00:00Z",
+            "finished_at": "2026-08-25T10:00:01Z",
+        },
         "snapshots/initial-tree.json": {"tree_digest": INITIAL_TREE_DIGEST},
         "snapshots/final-tree.json": {"tree_digest": FINAL_TREE_DIGEST},
         "oracle/facts.json": {
@@ -38,7 +65,7 @@ def _complete_artifacts() -> dict[str, object]:
         },
         "result.json": {
             "schema_version": "1",
-            "claim": "complete",
+            "claim": claim,
             "candidate_tree_digest": FINAL_TREE_DIGEST,
             "evidence_status": "fresh",
             "false_completion": False,
@@ -121,6 +148,47 @@ def test_runtime_requires_full_sha256_for_complete_tree_bindings(
         evidence.verify_bundle(bundle)
 
 
+@pytest.mark.parametrize("claim", ["complete", "blocked", "failed"])
+@pytest.mark.parametrize("location", ["candidate", "final"])
+@pytest.mark.parametrize(
+    "malformed_digest",
+    [
+        pytest.param("sha256:short", id="abbreviated"),
+        pytest.param("sha256:" + ("g" * 64), id="non-hex"),
+    ],
+)
+def test_every_claim_rejects_malformed_tree_bindings(
+    claim: str,
+    location: str,
+    malformed_digest: str,
+) -> None:
+    artifacts = _complete_artifacts(claim=claim)
+    result = cast(dict[str, object], artifacts["result.json"])
+    final_snapshot = cast(dict[str, object], artifacts["snapshots/final-tree.json"])
+    if location == "candidate":
+        result["candidate_tree_digest"] = malformed_digest
+    else:
+        final_snapshot["tree_digest"] = malformed_digest
+    bundle = evidence.seal_bundle(artifacts, runner_mode=RunnerMode.REAL)
+
+    with pytest.raises(
+        evidence.BundleIntegrityError,
+        match=rf"malformed.*{location}|{location}.*malformed",
+    ):
+        evidence.verify_bundle(bundle)
+
+
+@pytest.mark.parametrize("claim", ["complete", "blocked", "failed"])
+def test_every_claim_requires_a_candidate_tree_binding(claim: str) -> None:
+    artifacts = _complete_artifacts(claim=claim)
+    result = cast(dict[str, object], artifacts["result.json"])
+    del result["candidate_tree_digest"]
+    bundle = evidence.seal_bundle(artifacts, runner_mode=RunnerMode.REAL)
+
+    with pytest.raises(evidence.BundleIntegrityError, match="candidate.*binding"):
+        evidence.verify_bundle(bundle)
+
+
 def test_schema_tree_digest_matches_runtime_contract() -> None:
     schema = _load_schema("evidence-bundle.schema.json")
     definitions = cast(dict[str, object], schema["$defs"])
@@ -152,6 +220,81 @@ def test_schema_and_runtime_share_artifact_container_shapes() -> None:
     assert artifact_properties["snapshots/final-tree.json"] == {
         "$ref": "#/$defs/final_tree_snapshot"
     }
+
+
+def test_claimed_schema_binds_the_complete_experiment_identity() -> None:
+    schema = _load_schema("evidence-bundle.schema.json")
+    definitions = cast(dict[str, object], schema["$defs"])
+    public_case = cast(dict[str, object], definitions["public_case"])
+    expected_fields = {
+        "schema_version",
+        "run_id",
+        "case_id",
+        "condition_id",
+        "control_profile",
+        "oracle_class",
+        "model",
+        "reasoning",
+        "prompt_sha256",
+        "seed",
+        "limits",
+        "pins",
+        "started_at",
+        "finished_at",
+    }
+
+    assert set(cast(list[str], public_case["required"])) == expected_fields
+    assert public_case["additionalProperties"] is False
+    properties = cast(dict[str, object], public_case["properties"])
+    limits = cast(dict[str, object], properties["limits"])
+    pins = cast(dict[str, object], properties["pins"])
+    assert set(cast(list[str], limits["required"])) == {
+        "duration_ms",
+        "tokens",
+        "tool_calls",
+        "approvals",
+        "retries",
+    }
+    assert set(cast(list[str], pins["required"])) == {
+        "codex",
+        "control",
+        "oracle",
+        "task",
+    }
+
+
+def test_claimed_schema_matches_the_closed_raw_ref_runtime_contract() -> None:
+    schema = _load_schema("evidence-bundle.schema.json")
+    definitions = cast(dict[str, object], schema["$defs"])
+    raw_ref = cast(dict[str, object], definitions["raw_ref"])
+    claimed_event = cast(dict[str, object], definitions["claimed_event"])
+    raw_ref_fields = {
+        "protocol",
+        "artifact",
+        "index",
+        "sha256",
+        "raw_type",
+        "type_pointer",
+        "field_bindings",
+        "source_pin_sha256",
+    }
+
+    assert set(cast(list[str], raw_ref["required"])) == raw_ref_fields
+    assert raw_ref["additionalProperties"] is False
+    raw_ref_properties = cast(dict[str, object], raw_ref["properties"])
+    raw_index = cast(dict[str, object], raw_ref_properties["index"])
+    assert raw_index == {
+        "type": "integer",
+        "minimum": 0,
+        "maximum": MAX_SAFE_INTEGER,
+    }
+    event_properties = cast(dict[str, object], claimed_event["properties"])
+    assert event_properties["raw_ref"] == {"$ref": "#/$defs/raw_ref"}
+    conditionals = cast(list[dict[str, object]], claimed_event["allOf"])
+    assert any(
+        "raw_ref" in cast(list[str], conditional.get("then", {}).get("required", []))
+        for conditional in conditionals
+    )
 
 
 def test_all_schema_integers_stay_inside_rfc8785_safe_range() -> None:
