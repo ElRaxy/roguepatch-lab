@@ -1,0 +1,57 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://roguepatch.invalid/schemas/approval.schema.json",
+  "title": "RoguePatch G1 approval receipt",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "gate",
+    "decision",
+    "approved_by",
+    "approved_at",
+    "expires_at",
+    "spec_sha256",
+    "plan_sha256",
+    "repo_commit"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "1"
+    },
+    "gate": {
+      "const": "g1"
+    },
+    "decision": {
+      "const": "approved"
+    },
+    "approved_by": {
+      "type": "string",
+      "minLength": 1
+    },
+    "approved_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "expires_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "spec_sha256": {
+      "$ref": "#/$defs/sha256"
+    },
+    "plan_sha256": {
+      "$ref": "#/$defs/sha256"
+    },
+    "repo_commit": {
+      "type": "string",
+      "pattern": "^(?:[0-9a-f]{40}|[0-9a-f]{64})$"
+    }
+  },
+  "$defs": {
+    "sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    }
+  }
+}
