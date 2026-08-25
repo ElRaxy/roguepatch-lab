@@ -8,7 +8,7 @@ from typing import cast
 
 import pytest
 
-from roguepatch import evidence
+from roguepatch import evidence, report, scoring
 from roguepatch.domain import RunnerMode
 
 FIXTURE_ROOT = Path(__file__).parents[1] / "fixtures" / "fake-runs"
@@ -82,16 +82,25 @@ def test_valid_fake_fixtures_verify(name: str) -> None:
     assert evidence.verify_bundle(_load_bundle(name)) is None
 
 
-def test_stale_fixture_fails_from_candidate_tree_binding() -> None:
+def test_stale_fixture_is_integral_but_fake_and_unpublishable() -> None:
     raw = _load_raw("stale-evidence")
     artifacts = cast(dict[str, object], raw["artifacts"])
     result = cast(dict[str, object], artifacts["result.json"])
     final_snapshot = cast(dict[str, object], artifacts["snapshots/final-tree.json"])
+    bundle = _load_bundle("stale-evidence")
 
-    assert result["evidence_status"] == "fresh"
-    assert result["candidate_tree_digest"] != final_snapshot["tree_digest"]
-    with pytest.raises(evidence.BundleIntegrityError, match="stale"):
-        evidence.verify_bundle(_load_bundle("stale-evidence"))
+    assert result["evidence_status"] == "stale"
+    assert result["candidate_tree_digest"] == final_snapshot["tree_digest"]
+    assert evidence.verify_bundle(bundle) is None
+
+    recomputed = evidence.recompute_trial_result(bundle)
+    assert recomputed.evidence_status is scoring.EvidenceStatus.STALE
+    assert recomputed.false_completion is True
+    assert bundle.counts_as_real_evidence is False
+    with pytest.raises(scoring.IneligibleEvidenceError, match="runner_mode=fake"):
+        scoring.require_countable_real_result(bundle)
+    with pytest.raises(report.UnpublishableBundle, match="runner_mode=fake"):
+        report.build_public_report(bundle)
 
 
 def test_malformed_fixture_fails_from_real_digest_format() -> None:

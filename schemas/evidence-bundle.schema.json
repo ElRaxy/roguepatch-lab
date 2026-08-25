@@ -91,6 +91,9 @@
         "snapshots/final-tree.json": {
           "$ref": "#/$defs/final_tree_snapshot"
         },
+        "snapshots/violation-tree.json": {
+          "$ref": "#/$defs/json_object"
+        },
         "oracle/facts.json": {
           "$ref": "#/$defs/json_object"
         },
@@ -188,7 +191,16 @@
                 "maxContains": 1
               },
               "snapshots/final-tree.json": {
-                "$ref": "#/$defs/claimed_final_tree_snapshot"
+                "$ref": "#/$defs/claimed_tree_snapshot"
+              },
+              "snapshots/initial-tree.json": {
+                "$ref": "#/$defs/claimed_tree_snapshot"
+              },
+              "snapshots/violation-tree.json": {
+                "$ref": "#/$defs/claimed_tree_snapshot"
+              },
+              "oracle/facts.json": {
+                "$ref": "#/$defs/claimed_oracle_facts"
               },
               "result.json": {
                 "$ref": "#/$defs/claimed_trial_result"
@@ -249,6 +261,69 @@
       },
       "additionalProperties": {
         "$ref": "#/$defs/json_value"
+      }
+    },
+    "claimed_tree_snapshot": {
+      "type": "object",
+      "required": [
+        "tree_digest",
+        "protected_state_digest"
+      ],
+      "properties": {
+        "tree_digest": {
+          "$ref": "#/$defs/tree_digest"
+        },
+        "protected_state_digest": {
+          "$ref": "#/$defs/tree_digest"
+        }
+      },
+      "additionalProperties": {
+        "$ref": "#/$defs/json_value"
+      }
+    },
+    "claimed_oracle_facts": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "tests_pass",
+        "invariants_pass",
+        "candidate_unchanged",
+        "candidate_tree_digest"
+      ],
+      "properties": {
+        "tests_pass": {
+          "type": "boolean"
+        },
+        "invariants_pass": {
+          "type": "boolean"
+        },
+        "candidate_unchanged": {
+          "type": "boolean"
+        },
+        "candidate_tree_digest": {
+          "$ref": "#/$defs/tree_digest"
+        }
+      }
+    },
+    "claimed_evidence_ref": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "artifact",
+        "sha256",
+        "candidate_tree_digest"
+      ],
+      "properties": {
+        "artifact": {
+          "type": "string",
+          "minLength": 1
+        },
+        "sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "candidate_tree_digest": {
+          "$ref": "#/$defs/tree_digest"
+        }
       }
     },
     "json_object": {
@@ -477,7 +552,8 @@
           },
           "then": {
             "required": [
-              "status"
+              "status",
+              "claimed_evidence_refs"
             ],
             "not": {
               "required": [
@@ -485,6 +561,12 @@
               ]
             },
             "properties": {
+              "claimed_evidence_refs": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/$defs/json_value"
+                }
+              },
               "raw_ref": {
                 "$ref": "#/$defs/completion_raw_ref"
               }
@@ -510,6 +592,127 @@
             "properties": {
               "raw_ref": {
                 "$ref": "#/$defs/usage_raw_ref"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "type": {
+                "const": "effect.observed"
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "action_id",
+              "violated",
+              "target",
+              "pre_state_digest",
+              "post_state_digest"
+            ],
+            "properties": {
+              "violated": {
+                "type": "boolean"
+              },
+              "target": {
+                "type": "string",
+                "minLength": 1
+              },
+              "pre_state_digest": {
+                "$ref": "#/$defs/tree_digest"
+              },
+              "post_state_digest": {
+                "$ref": "#/$defs/tree_digest"
+              }
+            },
+            "allOf": [
+              {
+                "if": {
+                  "properties": {
+                    "violated": {
+                      "const": true
+                    }
+                  }
+                },
+                "then": {
+                  "required": [
+                    "violation_id"
+                  ]
+                }
+              }
+            ]
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "type": {
+                "const": "rollback.observed"
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "violation_id",
+              "actor",
+              "restored",
+              "target",
+              "pre_state_digest",
+              "post_state_digest"
+            ],
+            "properties": {
+              "actor": {
+                "enum": [
+                  "control",
+                  "agent",
+                  "lab_cleanup"
+                ]
+              },
+              "restored": {
+                "type": "boolean"
+              },
+              "target": {
+                "type": "string",
+                "minLength": 1
+              },
+              "pre_state_digest": {
+                "$ref": "#/$defs/tree_digest"
+              },
+              "post_state_digest": {
+                "$ref": "#/$defs/tree_digest"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "type": {
+                "const": "oracle.result"
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "tests_pass",
+              "invariants_pass",
+              "candidate_unchanged",
+              "candidate_tree_digest"
+            ],
+            "properties": {
+              "tests_pass": {
+                "type": "boolean"
+              },
+              "invariants_pass": {
+                "type": "boolean"
+              },
+              "candidate_unchanged": {
+                "type": "boolean"
+              },
+              "candidate_tree_digest": {
+                "$ref": "#/$defs/tree_digest"
               }
             }
           }
@@ -700,6 +903,9 @@
                 "properties": {
                   "status": {
                     "const": "/claim"
+                  },
+                  "claimed_evidence_refs": {
+                    "const": "/evidence_refs"
                   }
                 }
               }
@@ -715,10 +921,14 @@
           "type": "object",
           "additionalProperties": false,
           "required": [
-            "status"
+            "status",
+            "claimed_evidence_refs"
           ],
           "properties": {
             "status": {
+              "$ref": "#/$defs/json_pointer"
+            },
+            "claimed_evidence_refs": {
               "$ref": "#/$defs/json_pointer"
             }
           }
@@ -1051,6 +1261,14 @@
           "type": [
             "boolean",
             "null"
+          ]
+        },
+        "rollback_actor": {
+          "enum": [
+            null,
+            "control",
+            "agent",
+            "lab_cleanup"
           ]
         },
         "not_exercised": {

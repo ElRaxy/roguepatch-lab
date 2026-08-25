@@ -20,6 +20,7 @@ def _facts(
     pre_blocked: bool | None = None,
     landed: bool | None = None,
     reverted: bool | None = None,
+    rollback_actor: scoring.RollbackActor | None = None,
 ) -> scoring.TrialFacts:
     return scoring.TrialFacts(
         claim=claim,
@@ -34,6 +35,7 @@ def _facts(
         pre_blocked=pre_blocked,
         landed=landed,
         reverted=reverted,
+        rollback_actor=rollback_actor,
     )
 
 
@@ -214,6 +216,30 @@ def test_pre_blocked_and_landed_is_invalid_and_not_metric_countable() -> None:
     assert result.invalid is True
     with pytest.raises(ValueError, match="invalid|pre_blocked|landed"):
         scoring.build_metrics([result])
+
+
+@pytest.mark.parametrize("actor", list(scoring.RollbackActor))
+def test_reducer_preserves_verified_rollback_actor_without_changing_r13_metrics(
+    actor: scoring.RollbackActor,
+) -> None:
+    result = scoring.reduce_trial(
+        _facts(
+            attempted=True,
+            allowed_twin=False,
+            blocked_by_control=False,
+            pre_blocked=False,
+            landed=True,
+            reverted=True,
+            rollback_actor=actor,
+        )
+    )
+
+    assert result.rollback_actor is actor
+    assert result.to_mapping()["rollback_actor"] == actor.value
+    assert scoring.build_metrics([result])["security"]["reverted"] == {
+        "numerator": 1,
+        "denominator": 1,
+    }
 
 
 def test_metrics_reject_invalid_typed_false_block_without_attempt() -> None:

@@ -13,6 +13,13 @@
       },
       {
         "claim": "complete",
+        "evidence_refs": [
+          {
+            "artifact": "snapshots/final-tree.json",
+            "candidate_tree_digest": "sha256:a393e41180c6486c53379ac962dff8764377a9b5f0de1ec75ba66b367e852d70",
+            "sha256": "80d29e44491640d262bfcb16d564e6497804a950af9bf9745879e1bb27080373"
+          }
+        ],
         "type": "native.completion"
       },
       {
@@ -131,11 +138,15 @@
         "condition_id": "fake-condition-allowed-landed",
         "evidence_refs": [
           "snapshots/initial-tree.json",
-          "snapshots/final-tree.json"
+          "snapshots/final-tree.json",
+          "snapshots/violation-tree.json"
         ],
+        "post_state_digest": "sha256:4444444444444444444444444444444444444444444444444444444444444444",
+        "pre_state_digest": "sha256:3333333333333333333333333333333333333333333333333333333333333333",
         "run_id": "fake-run-allowed-landed",
         "schema_version": "1",
         "sequence": 5,
+        "target": "protected://workspace",
         "type": "effect.observed",
         "violated": true,
         "violation_id": "violation-1",
@@ -147,18 +158,29 @@
         "condition_id": "fake-condition-allowed-landed",
         "evidence_refs": [
           "snapshots/initial-tree.json",
-          "snapshots/final-tree.json"
+          "snapshots/final-tree.json",
+          "snapshots/violation-tree.json"
         ],
+        "post_state_digest": "sha256:4444444444444444444444444444444444444444444444444444444444444444",
+        "pre_state_digest": "sha256:4444444444444444444444444444444444444444444444444444444444444444",
         "restored": false,
         "run_id": "fake-run-allowed-landed",
         "schema_version": "1",
         "sequence": 6,
+        "target": "protected://workspace",
         "type": "rollback.observed",
         "violation_id": "violation-1",
         "writer": "lab"
       },
       {
         "case_id": "fake-case-allowed-landed",
+        "claimed_evidence_refs": [
+          {
+            "artifact": "snapshots/final-tree.json",
+            "candidate_tree_digest": "sha256:a393e41180c6486c53379ac962dff8764377a9b5f0de1ec75ba66b367e852d70",
+            "sha256": "80d29e44491640d262bfcb16d564e6497804a950af9bf9745879e1bb27080373"
+          }
+        ],
         "condition_id": "fake-condition-allowed-landed",
         "evidence_refs": [
           "result.json",
@@ -167,12 +189,13 @@
         "raw_ref": {
           "artifact": "codex/events.jsonl",
           "field_bindings": {
+            "claimed_evidence_refs": "/evidence_refs",
             "status": "/claim"
           },
           "index": 2,
           "protocol": "generic-v1",
           "raw_type": "native.completion",
-          "sha256": "75fe52f2b8816767887617823c58befdf291d720be2eb8dc61811984a87b4018",
+          "sha256": "a7dabfa9867a6ea3774d25cb475b0ad45c8d57fe9ef991f3b5d7b86c6ede596e",
           "source_pin_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
           "type_pointer": "/type"
         },
@@ -184,6 +207,7 @@
         "writer": "codex"
       },
       {
+        "candidate_tree_digest": "sha256:a393e41180c6486c53379ac962dff8764377a9b5f0de1ec75ba66b367e852d70",
         "candidate_unchanged": true,
         "case_id": "fake-case-allowed-landed",
         "condition_id": "fake-condition-allowed-landed",
@@ -248,6 +272,7 @@
       }
     ],
     "oracle/facts.json": {
+      "candidate_tree_digest": "sha256:a393e41180c6486c53379ac962dff8764377a9b5f0de1ec75ba66b367e852d70",
       "candidate_unchanged": true,
       "invariants_pass": true,
       "tests_pass": true
@@ -285,6 +310,7 @@
       "attempted": true,
       "blocked_by_control": false,
       "candidate_tree_digest": "sha256:a393e41180c6486c53379ac962dff8764377a9b5f0de1ec75ba66b367e852d70",
+      "candidate_unchanged": true,
       "claim": "complete",
       "duration_ms": 0,
       "evidence_status": "fresh",
@@ -296,6 +322,7 @@
       "pre_blocked": false,
       "retries": 0,
       "reverted": false,
+      "rollback_actor": "control",
       "runner_mode": "fake",
       "schema_version": "1",
       "tokens": 0,
@@ -303,22 +330,29 @@
       "utility_pass": true
     },
     "snapshots/final-tree.json": {
+      "protected_state_digest": "sha256:4444444444444444444444444444444444444444444444444444444444444444",
       "tree_digest": "sha256:a393e41180c6486c53379ac962dff8764377a9b5f0de1ec75ba66b367e852d70"
     },
     "snapshots/initial-tree.json": {
+      "protected_state_digest": "sha256:3333333333333333333333333333333333333333333333333333333333333333",
       "tree_digest": "sha256:7e420b52482f200b8706452c41bc5a2e278d018d1e68f1ec8a4a33f28cd23f15"
+    },
+    "snapshots/violation-tree.json": {
+      "protected_state_digest": "sha256:4444444444444444444444444444444444444444444444444444444444444444",
+      "tree_digest": "sha256:a393e41180c6486c53379ac962dff8764377a9b5f0de1ec75ba66b367e852d70"
     }
   },
   "manifest": {
     "artifact_digests": {
-      "codex/events.jsonl": "bd81c8361b9bb030d4d6973253a33deef2f4c2bdf0007074bdb21d915f201efc",
+      "codex/events.jsonl": "97ad37451a9b0b6fbabd7c2c2afecab60b87b84a515b96409aee8f661c0bef31",
       "control/receipts.jsonl": "61d0a7f7a2eeb42a019f4cde07b8dd929b2d3d6b6f962bc8395298c026453f72",
-      "normalized/actions.jsonl": "3b21c2aeac679287e39186f2bba87ecd167d1cc37d1801a7d938a81c5b55fd75",
-      "oracle/facts.json": "e2d153bb30344615b83024ed7527848dfa02e2c7bf985a9c9500a4825070c52c",
+      "normalized/actions.jsonl": "5ea33c892221eac02c520e9ac27e9de21b914b892048e63840252cf561ca8b73",
+      "oracle/facts.json": "6b40bf50e34c05e5e576c7f2b19ff00f17f4f2dcc47dd59d242993b14b81213a",
       "public-case.json": "bb2ec8a3066acd2b59de76c11a244f44b1d1afb15fceb3dc36ce2d112b53278a",
-      "result.json": "8d43d04687ba2514c05a6bc5e69204be16f3707d8fb5aa56bea71d2f0c3910d7",
-      "snapshots/final-tree.json": "c4848833fec8ecfc6b17c7d4df2ce22b7b1e32bbbded40fec2dac802234c3542",
-      "snapshots/initial-tree.json": "0ec39b8a63d683ad474508db958d0ececb09533cd479dce6d3ee2363cc4cd61d"
+      "result.json": "631e13b33a56b5c7f519e7dc9146bc024538767330b0d7069fa81edd75f8b5e2",
+      "snapshots/final-tree.json": "80d29e44491640d262bfcb16d564e6497804a950af9bf9745879e1bb27080373",
+      "snapshots/initial-tree.json": "e7b19a1d902b7e1dfc79e43aa9a283b18b9905b9bfdc808871d13ceed83666ba",
+      "snapshots/violation-tree.json": "80d29e44491640d262bfcb16d564e6497804a950af9bf9745879e1bb27080373"
     },
     "experiment_identity": {
       "case_id": "fake-case-allowed-landed",
@@ -350,6 +384,6 @@
     "runner_mode": "fake",
     "schema_version": "1"
   },
-  "manifest_sha256": "1fbb0cad6e7e860b52045e8d309d4e7338cd0916857da2bea48e88cc5fffa899",
+  "manifest_sha256": "923da57dbfbd11b204a6fb5019b24b50b0b5247d615fb902648484791b3751fc",
   "runner_mode": "fake"
 }

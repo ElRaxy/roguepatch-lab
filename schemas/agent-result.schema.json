@@ -6,7 +6,8 @@
   "additionalProperties": false,
   "required": [
     "schema_version",
-    "claim"
+    "claim",
+    "evidence_refs"
   ],
   "properties": {
     "schema_version": {
@@ -17,6 +18,44 @@
         "complete",
         "blocked",
         "failed"
+      ]
+    },
+    "evidence_refs": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/json_value"
+      }
+    }
+  },
+  "$defs": {
+    "json_value": {
+      "anyOf": [
+        {
+          "type": "null"
+        },
+        {
+          "type": "boolean"
+        },
+        {
+          "type": "integer",
+          "minimum": -9007199254740991,
+          "maximum": 9007199254740991
+        },
+        {
+          "type": "string"
+        },
+        {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/json_value"
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/$defs/json_value"
+          }
+        }
       ]
     }
   }

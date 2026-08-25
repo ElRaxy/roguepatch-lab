@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from collections.abc import Callable
 from hashlib import sha256
+from typing import cast
 
 import pytest
 
@@ -11,6 +12,7 @@ from roguepatch.domain import RunnerMode
 
 INITIAL_TREE_DIGEST = "sha256:" + ("1" * 64)
 FINAL_TREE_DIGEST = "sha256:" + ("2" * 64)
+INITIAL_PROTECTED_STATE_DIGEST = "sha256:" + ("3" * 64)
 
 
 def _raw_ref(
@@ -41,7 +43,10 @@ def _raw_ref(
         "completion.claimed": (
             "codex/events.jsonl",
             "native.completion",
-            {"status": "/claim"},
+            {
+                "status": "/claim",
+                "claimed_evidence_refs": "/evidence_refs",
+            },
             "a" * 64,
         ),
         "usage.observed": (
@@ -79,6 +84,21 @@ def _bundle(
     include_usage: bool = True,
 ) -> evidence.EvidenceBundle:
     events: list[dict[str, object]] = []
+    initial_snapshot = {
+        "tree_digest": INITIAL_TREE_DIGEST,
+        "protected_state_digest": INITIAL_PROTECTED_STATE_DIGEST,
+    }
+    final_snapshot = {
+        "tree_digest": FINAL_TREE_DIGEST,
+        "protected_state_digest": INITIAL_PROTECTED_STATE_DIGEST,
+    }
+    claimed_evidence_refs = [
+        {
+            "artifact": "snapshots/final-tree.json",
+            "sha256": sha256(evidence.canonical_json(final_snapshot)).hexdigest(),
+            "candidate_tree_digest": FINAL_TREE_DIGEST,
+        }
+    ]
     provenance = {
         "run.bound": ("lab", ["public-case.json"]),
         "action.requested": ("codex", ["codex/events.jsonl"]),
@@ -146,13 +166,21 @@ def _bundle(
         "effect.observed",
         action_id="action-1",
         violated=False,
+        target="protected://workspace",
+        pre_state_digest=INITIAL_PROTECTED_STATE_DIGEST,
+        post_state_digest=INITIAL_PROTECTED_STATE_DIGEST,
     )
-    add_event("completion.claimed", status="complete")
+    add_event(
+        "completion.claimed",
+        status="complete",
+        claimed_evidence_refs=claimed_evidence_refs,
+    )
     add_event(
         "oracle.result",
         tests_pass=True,
         invariants_pass=True,
         candidate_unchanged=True,
+        candidate_tree_digest=FINAL_TREE_DIGEST,
     )
     add_event("evidence.checked", status="fresh")
     if include_usage:
@@ -171,7 +199,11 @@ def _bundle(
             "action_id": "action-1",
             "started": False,
         },
-        {"type": "native.completion", "claim": "complete"},
+        {
+            "type": "native.completion",
+            "claim": "complete",
+            "evidence_refs": claimed_evidence_refs,
+        },
         {
             "type": "native.diagnostic",
             "action_id": "action-1",
@@ -227,12 +259,13 @@ def _bundle(
             }
         ],
         "normalized/actions.jsonl": events,
-        "snapshots/initial-tree.json": {"tree_digest": INITIAL_TREE_DIGEST},
-        "snapshots/final-tree.json": {"tree_digest": FINAL_TREE_DIGEST},
+        "snapshots/initial-tree.json": initial_snapshot,
+        "snapshots/final-tree.json": final_snapshot,
         "oracle/facts.json": {
             "tests_pass": True,
             "invariants_pass": True,
             "candidate_unchanged": True,
+            "candidate_tree_digest": FINAL_TREE_DIGEST,
         },
         "result.json": {
             "schema_version": "1",
@@ -248,6 +281,7 @@ def _bundle(
             "pre_blocked": False,
             "landed": False,
             "reverted": False,
+            "rollback_actor": None,
             "not_exercised": False,
             "invalid": False,
             "utility_pass": True,
@@ -297,6 +331,37 @@ def test_json_public_report_remains_canonical_and_factual() -> None:
         "result",
     }
     assert payload["result"]["false_completion"] is False
+    assert payload["result"]["rollback_actor"] is None
+
+
+@pytest.mark.parametrize(
+    "renderer_name",
+    [
+        "build_public_report",
+        "build_public_report_csv",
+        "build_public_report_markdown",
+    ],
+)
+def test_public_formats_reject_an_oracle_bound_to_another_candidate(
+    renderer_name: str,
+) -> None:
+    renderer: Callable[[evidence.EvidenceBundle], bytes] = getattr(
+        report, renderer_name
+    )
+    artifacts = cast(
+        dict[str, object],
+        json.loads(evidence.canonical_json(_bundle(RunnerMode.REAL).artifacts)),
+    )
+    oracle = cast(dict[str, object], artifacts["oracle/facts.json"])
+    events = cast(list[dict[str, object]], artifacts["normalized/actions.jsonl"])
+    oracle_event = next(event for event in events if event["type"] == "oracle.result")
+    stale_digest = "sha256:" + ("9" * 64)
+    oracle["candidate_tree_digest"] = stale_digest
+    oracle_event["candidate_tree_digest"] = stale_digest
+    bundle = evidence.seal_bundle(artifacts, runner_mode=RunnerMode.REAL)
+
+    with pytest.raises(report.UnpublishableBundle, match="oracle|candidate|digest"):
+        renderer(bundle)
 
 
 def test_claimed_bundle_manifest_preserves_exact_experiment_identity() -> None:

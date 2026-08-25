@@ -22,6 +22,7 @@ _PUBLIC_RESULT_FIELDS = (
     "pre_blocked",
     "landed",
     "reverted",
+    "rollback_actor",
     "false_completion",
     "not_exercised",
     "invalid",

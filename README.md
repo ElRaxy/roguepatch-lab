@@ -10,6 +10,8 @@ The local core now includes the typed domain, sealed evidence verification, dete
 
 F2 treats experiment pins as opaque SHA-256 commitments and verifies that normalized source references carry the matching commitment. Constructing those commitments from tool surfaces, images, or fixtures—and comparing them before a run—belongs to the producer/F5 boundary; F2 does not claim to prove that composition.
 
+For claimed runs, F2 binds the oracle verdict to the final candidate digest, preserves agent-declared evidence references as typed observations, and derives rollback from committed protected-state checkpoints plus an explicit remediation actor. A stale, missing, malformed, bad-digest, or unbound claim reference does not break bundle closure; it remains an observable result that can drive false-completion reporting.
+
 ## Design constraints
 
 - Keep the agent workspace separate from the protected manifest and oracle.

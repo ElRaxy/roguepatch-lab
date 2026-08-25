@@ -297,6 +297,106 @@ def test_claimed_schema_matches_the_closed_raw_ref_runtime_contract() -> None:
     )
 
 
+def test_claimed_schema_binds_oracle_to_the_current_candidate_tree() -> None:
+    schema = _load_schema("evidence-bundle.schema.json")
+    definitions = cast(dict[str, object], schema["$defs"])
+    oracle_facts = cast(dict[str, object], definitions["claimed_oracle_facts"])
+    claimed_event = cast(dict[str, object], definitions["claimed_event"])
+
+    assert "candidate_tree_digest" in cast(list[str], oracle_facts["required"])
+    oracle_properties = cast(dict[str, object], oracle_facts["properties"])
+    assert oracle_properties["candidate_tree_digest"] == {"$ref": "#/$defs/tree_digest"}
+    oracle_conditional = next(
+        conditional
+        for conditional in cast(list[dict[str, object]], claimed_event["allOf"])
+        if conditional.get("if", {}).get("properties", {}).get("type", {}).get("const")
+        == "oracle.result"
+    )
+    assert "candidate_tree_digest" in cast(
+        list[str], oracle_conditional["then"]["required"]
+    )
+
+
+def test_claimed_schema_requires_protected_checkpoints_and_typed_rollback_actor() -> (
+    None
+):
+    schema = _load_schema("evidence-bundle.schema.json")
+    definitions = cast(dict[str, object], schema["$defs"])
+    protected_snapshot = cast(dict[str, object], definitions["claimed_tree_snapshot"])
+    claimed_event = cast(dict[str, object], definitions["claimed_event"])
+
+    assert set(cast(list[str], protected_snapshot["required"])) == {
+        "tree_digest",
+        "protected_state_digest",
+    }
+    conditionals = cast(list[dict[str, object]], claimed_event["allOf"])
+    rollback = next(
+        conditional
+        for conditional in conditionals
+        if conditional.get("if", {}).get("properties", {}).get("type", {}).get("const")
+        == "rollback.observed"
+    )
+    rollback_then = cast(dict[str, object], rollback["then"])
+    assert {
+        "violation_id",
+        "actor",
+        "restored",
+        "target",
+        "pre_state_digest",
+        "post_state_digest",
+    }.issubset(cast(list[str], rollback_then["required"]))
+    rollback_properties = cast(dict[str, object], rollback_then["properties"])
+    assert rollback_properties["actor"] == {"enum": ["control", "agent", "lab_cleanup"]}
+
+
+def test_claimed_completion_schema_separates_provenance_from_claimed_refs() -> None:
+    evidence_schema = _load_schema("evidence-bundle.schema.json")
+    definitions = cast(dict[str, object], evidence_schema["$defs"])
+    claimed_ref = cast(dict[str, object], definitions["claimed_evidence_ref"])
+    completion_ref = cast(dict[str, object], definitions["completion_raw_ref"])
+    claimed_event = cast(dict[str, object], definitions["claimed_event"])
+    agent_result = _load_schema("agent-result.schema.json")
+
+    assert set(cast(list[str], claimed_ref["required"])) == {
+        "artifact",
+        "sha256",
+        "candidate_tree_digest",
+    }
+    assert claimed_ref["additionalProperties"] is False
+    completion_properties = cast(dict[str, object], completion_ref["properties"])
+    bindings = cast(dict[str, object], completion_properties["field_bindings"])
+    assert set(cast(list[str], bindings["required"])) == {
+        "status",
+        "claimed_evidence_refs",
+    }
+    assert "evidence_refs" in cast(list[str], agent_result["required"])
+    completion = next(
+        conditional
+        for conditional in cast(list[dict[str, object]], claimed_event["allOf"])
+        if conditional.get("if", {}).get("properties", {}).get("type", {}).get("const")
+        == "completion.claimed"
+    )
+    completion_properties = cast(dict[str, object], completion["then"]["properties"])
+    captured_refs = cast(
+        dict[str, object], completion_properties["claimed_evidence_refs"]
+    )
+    assert captured_refs["items"] == {"$ref": "#/$defs/json_value"}
+    agent_properties = cast(dict[str, object], agent_result["properties"])
+    agent_refs = cast(dict[str, object], agent_properties["evidence_refs"])
+    assert agent_refs["items"] == {"$ref": "#/$defs/json_value"}
+
+
+def test_claimed_result_schema_preserves_nullable_rollback_actor() -> None:
+    schema = _load_schema("evidence-bundle.schema.json")
+    definitions = cast(dict[str, object], schema["$defs"])
+    trial_result = cast(dict[str, object], definitions["trial_result"])
+    properties = cast(dict[str, object], trial_result["properties"])
+
+    assert properties["rollback_actor"] == {
+        "enum": [None, "control", "agent", "lab_cleanup"]
+    }
+
+
 def test_all_schema_integers_stay_inside_rfc8785_safe_range() -> None:
     schemas = [
         _load_schema("agent-result.schema.json"),

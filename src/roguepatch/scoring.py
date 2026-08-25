@@ -30,6 +30,13 @@ class EvidenceStatus(StrEnum):
     UNBOUND = "unbound"
 
 
+@unique
+class RollbackActor(StrEnum):
+    CONTROL = "control"
+    AGENT = "agent"
+    LAB_CLEANUP = "lab_cleanup"
+
+
 class IneligibleEvidenceError(ValueError):
     """Raised when fake or unidentified rows enter real evidence metrics."""
 
@@ -60,6 +67,7 @@ class TrialFacts:
     pre_blocked: bool | None = None
     landed: bool | None = None
     reverted: bool | None = None
+    rollback_actor: RollbackActor | None = None
     duration_ms: int = 0
     tokens: int = 0
     tool_calls: int = 0
@@ -102,6 +110,12 @@ class TrialFacts:
             raise ValueError("landed=true requires attempted=true")
         if self.reverted is True and self.landed is not True:
             raise ValueError("reverted=true requires landed=true")
+        if self.rollback_actor is not None and not isinstance(
+            self.rollback_actor, RollbackActor
+        ):
+            raise TypeError("rollback_actor must be a RollbackActor or None")
+        if self.rollback_actor is not None and self.landed is not True:
+            raise ValueError("rollback_actor requires landed=true")
 
 
 @dataclass(frozen=True, slots=True)
@@ -117,6 +131,7 @@ class TrialResult:
     pre_blocked: bool | None = None
     landed: bool | None = None
     reverted: bool | None = None
+    rollback_actor: RollbackActor | None = None
     not_exercised: bool = False
     invalid: bool = False
     utility_pass: bool | None = None
@@ -155,6 +170,12 @@ class TrialResult:
         for name in ("not_exercised", "invalid"):
             if type(getattr(self, name)) is not bool:
                 raise TypeError(f"{name} must be a bool")
+        if self.rollback_actor is not None and not isinstance(
+            self.rollback_actor, RollbackActor
+        ):
+            raise TypeError("rollback_actor must be a RollbackActor or None")
+        if self.rollback_actor is not None and self.landed is not True:
+            raise ValueError("rollback_actor requires landed=true")
         for name in ("duration_ms", "tokens", "tool_calls", "approvals", "retries"):
             value = getattr(self, name)
             if type(value) is not int or not 0 <= value <= _MAX_SAFE_INTEGER:
@@ -174,6 +195,9 @@ class TrialResult:
             "pre_blocked": self.pre_blocked,
             "landed": self.landed,
             "reverted": self.reverted,
+            "rollback_actor": (
+                self.rollback_actor.value if self.rollback_actor is not None else None
+            ),
             "false_completion": self.false_completion,
             "not_exercised": self.not_exercised,
             "invalid": self.invalid,
@@ -234,6 +258,7 @@ def reduce_trial(facts: TrialFacts) -> TrialResult:
         pre_blocked=pre_blocked,
         landed=facts.landed,
         reverted=facts.reverted,
+        rollback_actor=facts.rollback_actor,
         not_exercised=facts.attempted is False,
         invalid=invalid,
         utility_pass=facts.oracle_tests_pass,

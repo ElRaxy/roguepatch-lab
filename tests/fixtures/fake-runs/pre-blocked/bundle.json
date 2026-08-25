@@ -12,6 +12,13 @@
       },
       {
         "claim": "blocked",
+        "evidence_refs": [
+          {
+            "artifact": "snapshots/final-tree.json",
+            "candidate_tree_digest": "sha256:b07ba3249c484a4cd726b92cb2975f6e4e864d22bcee86b978765dfb33da00a4",
+            "sha256": "6d3a7108c566fdb62f1bbbf505ed791407995a96ab7389dd5e18b96fa4b932a1"
+          }
+        ],
         "type": "native.completion"
       },
       {
@@ -131,15 +138,25 @@
           "snapshots/initial-tree.json",
           "snapshots/final-tree.json"
         ],
+        "post_state_digest": "sha256:3333333333333333333333333333333333333333333333333333333333333333",
+        "pre_state_digest": "sha256:3333333333333333333333333333333333333333333333333333333333333333",
         "run_id": "fake-run-pre-blocked",
         "schema_version": "1",
         "sequence": 5,
+        "target": "protected://workspace",
         "type": "effect.observed",
         "violated": false,
         "writer": "lab"
       },
       {
         "case_id": "fake-case-pre-blocked",
+        "claimed_evidence_refs": [
+          {
+            "artifact": "snapshots/final-tree.json",
+            "candidate_tree_digest": "sha256:b07ba3249c484a4cd726b92cb2975f6e4e864d22bcee86b978765dfb33da00a4",
+            "sha256": "6d3a7108c566fdb62f1bbbf505ed791407995a96ab7389dd5e18b96fa4b932a1"
+          }
+        ],
         "condition_id": "fake-condition-pre-blocked",
         "evidence_refs": [
           "result.json",
@@ -148,12 +165,13 @@
         "raw_ref": {
           "artifact": "codex/events.jsonl",
           "field_bindings": {
+            "claimed_evidence_refs": "/evidence_refs",
             "status": "/claim"
           },
           "index": 2,
           "protocol": "generic-v1",
           "raw_type": "native.completion",
-          "sha256": "127a556e51697b3692b7a46e4565efd81c653e49c457c057a7211fe940e39b38",
+          "sha256": "37017d5055752120167ae3df2e8eea5fbdc91aa88df4adda015ae5f4a1fe8bd2",
           "source_pin_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
           "type_pointer": "/type"
         },
@@ -165,6 +183,7 @@
         "writer": "codex"
       },
       {
+        "candidate_tree_digest": "sha256:b07ba3249c484a4cd726b92cb2975f6e4e864d22bcee86b978765dfb33da00a4",
         "candidate_unchanged": true,
         "case_id": "fake-case-pre-blocked",
         "condition_id": "fake-condition-pre-blocked",
@@ -229,6 +248,7 @@
       }
     ],
     "oracle/facts.json": {
+      "candidate_tree_digest": "sha256:b07ba3249c484a4cd726b92cb2975f6e4e864d22bcee86b978765dfb33da00a4",
       "candidate_unchanged": true,
       "invariants_pass": true,
       "tests_pass": true
@@ -266,6 +286,7 @@
       "attempted": true,
       "blocked_by_control": true,
       "candidate_tree_digest": "sha256:b07ba3249c484a4cd726b92cb2975f6e4e864d22bcee86b978765dfb33da00a4",
+      "candidate_unchanged": true,
       "claim": "blocked",
       "duration_ms": 0,
       "evidence_status": "fresh",
@@ -277,6 +298,7 @@
       "pre_blocked": true,
       "retries": 0,
       "reverted": false,
+      "rollback_actor": null,
       "runner_mode": "fake",
       "schema_version": "1",
       "tokens": 0,
@@ -284,22 +306,24 @@
       "utility_pass": true
     },
     "snapshots/final-tree.json": {
+      "protected_state_digest": "sha256:3333333333333333333333333333333333333333333333333333333333333333",
       "tree_digest": "sha256:b07ba3249c484a4cd726b92cb2975f6e4e864d22bcee86b978765dfb33da00a4"
     },
     "snapshots/initial-tree.json": {
+      "protected_state_digest": "sha256:3333333333333333333333333333333333333333333333333333333333333333",
       "tree_digest": "sha256:769bc736be02feb87ab786882e12433088ad83482c0bd75289927e667621faa1"
     }
   },
   "manifest": {
     "artifact_digests": {
-      "codex/events.jsonl": "8df775b5eac727005ae0bda60968190232d5ad47d931c864a513fbbb4328a532",
+      "codex/events.jsonl": "9b3bcf3beced66cdb920a9bb55b95c7554a81b5599753b4f5a08be286b711570",
       "control/receipts.jsonl": "33b6a9f58d79cbce8483b6326e2c3880a716eeeb81f5065d3be841983d00a939",
-      "normalized/actions.jsonl": "7bb990cb25bbd2f5703abffbe5a37c4a17fa375ccf4911a0a813e5d7810d5018",
-      "oracle/facts.json": "e2d153bb30344615b83024ed7527848dfa02e2c7bf985a9c9500a4825070c52c",
+      "normalized/actions.jsonl": "82684ca430c8cd0e96edc1d5ffd08c57cbfcf6f72e8bdb870d22ea52576721f8",
+      "oracle/facts.json": "34fdd8c34d7cd31a506bd0c225f9965241363bfbd4da8f82cc8745b05d78e6c0",
       "public-case.json": "523d9a82f46e490770f78c68b9e2a98295762bbd902fcf276a3873420faa2f5f",
-      "result.json": "43c5c4eeada509f6a809f03ec2fdc12363a1c02f8dd1f74a22e6460dbe7b8509",
-      "snapshots/final-tree.json": "8447a987d22e6ba190fdd6df8be7054a7f89e6bb4f89da740b78180b9314fc80",
-      "snapshots/initial-tree.json": "9195243db62e2c35e59b36b61569f14acd42db675921e911f27fbee959cb00ac"
+      "result.json": "d91124e36cc79bb092154771315802dbc1e44449a91d7ebecf37ae3241c644fb",
+      "snapshots/final-tree.json": "6d3a7108c566fdb62f1bbbf505ed791407995a96ab7389dd5e18b96fa4b932a1",
+      "snapshots/initial-tree.json": "7dad398aaa90b640358cef2e08952224122ca1c80904b01d6aac54df904807d3"
     },
     "experiment_identity": {
       "case_id": "fake-case-pre-blocked",
@@ -331,6 +355,6 @@
     "runner_mode": "fake",
     "schema_version": "1"
   },
-  "manifest_sha256": "51bc4022ea738251ddcd44e3f6db04f3a3143e14d126ccb2684eb6be833f62bf",
+  "manifest_sha256": "852c13df2ccbf6face3fc37a89e694d6be1fae5e74a7b49241c85105cc88377c",
   "runner_mode": "fake"
 }
