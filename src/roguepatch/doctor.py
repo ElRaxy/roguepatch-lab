@@ -14,6 +14,7 @@ class DoctorCheck(StrEnum):
     SBX = "sbx"
     PINS = "pins"
     AUTH = "auth"
+    ISOLATION = "isolation"
 
 
 @unique
@@ -21,6 +22,46 @@ class CheckState(StrEnum):
     READY = "ready"
     MISSING = "missing"
     ERROR = "error"
+
+
+_DoctorCommandKey = tuple[
+    tuple[str, ...],
+    str,
+    tuple[tuple[str, str], ...],
+    int,
+    int,
+]
+
+
+def _doctor_command_key(command: CommandSpec) -> _DoctorCommandKey:
+    return (
+        command.argv,
+        str(command.cwd),
+        tuple(sorted(command.env.items())),
+        command.timeout_seconds,
+        command.max_output_bytes,
+    )
+
+
+# Task 3 admits only inert fake probes; Task 4 may add audited real inspections after G1.
+_DOCTOR_COMMAND_REGISTRY: Mapping[DoctorCheck, frozenset[_DoctorCommandKey]] = (
+    MappingProxyType(
+        {
+            check: frozenset(
+                {
+                    (
+                        ("synthetic-probe", check.value),
+                        "/synthetic/roguepatch",
+                        (("PATH", "/synthetic/bin"),),
+                        5,
+                        4096,
+                    )
+                }
+            )
+            for check in DoctorCheck
+        }
+    )
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -31,8 +72,15 @@ class DoctorProbe:
     def __post_init__(self) -> None:
         if not isinstance(self.check, DoctorCheck):
             raise TypeError("check must be a DoctorCheck")
+        if not isinstance(self.command, CommandSpec):
+            raise TypeError("command must be a CommandSpec")
         if self.command.mutating:
             raise ValueError("doctor probes must be read-only")
+        if (
+            _doctor_command_key(self.command)
+            not in _DOCTOR_COMMAND_REGISTRY[self.check]
+        ):
+            raise ValueError("doctor probe is not a registered read-only command")
 
 
 @dataclass(frozen=True, slots=True)
@@ -86,7 +134,7 @@ def run_doctor(
             continue
         try:
             result = command_probe.run(configured_probe.command)
-        except (OSError, RuntimeError, TimeoutError) as error:
+        except Exception as error:  # noqa: BLE001 - adapter boundary must fail closed
             facts[check] = CheckFact(
                 check=check,
                 state=CheckState.ERROR,

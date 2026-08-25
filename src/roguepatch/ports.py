@@ -76,7 +76,7 @@ class CommandResult:
 
     @property
     def succeeded(self) -> bool:
-        return self.returncode == 0 and not self.timed_out
+        return self.returncode == 0 and not self.timed_out and not self.truncated
 
 
 class CommandProbe(Protocol):

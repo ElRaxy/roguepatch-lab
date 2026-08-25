@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import inspect
 import json
+import os
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import cast
@@ -15,12 +16,19 @@ from roguepatch.approval import (
     ApprovalState,
     ApprovalStore,
     run_approved_mutation,
+    run_host_approved_mutation,
 )
 from roguepatch.doctor import CheckState, DoctorCheck, DoctorProbe, run_doctor
 from roguepatch.ports import CommandResult, CommandSpec
 
 NOW = datetime(2026, 8, 25, 12, 0, tzinfo=UTC)
 ABSOLUTE_CWD = Path("/synthetic/roguepatch")
+
+
+@pytest.fixture(autouse=True)
+def _fixed_approval_host(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(approval, "_alex_uid", lambda: os.getuid(), raising=False)
+    monkeypatch.setattr(approval, "_utc_now", lambda: NOW, raising=False)
 
 
 def _binding() -> ApprovalBinding:
@@ -160,6 +168,18 @@ def test_command_spec_rejects_unsafe_limits(
         CommandSpec(**values)  # type: ignore[arg-type]
 
 
+def test_truncated_command_output_never_counts_as_success() -> None:
+    result = CommandResult(
+        returncode=0,
+        stdout="partial",
+        stderr="",
+        timed_out=False,
+        truncated=True,
+    )
+
+    assert result.succeeded is False
+
+
 def test_doctor_reports_ready_only_when_every_read_only_probe_succeeds() -> None:
     probes = _doctor_probes()
     command_probe = FakeCommandProbe(
@@ -173,6 +193,35 @@ def test_doctor_reports_ready_only_when_every_read_only_probe_succeeds() -> None
     assert all(fact.state is CheckState.READY for fact in report.facts.values())
     assert command_probe.calls == tuple(probe.command for probe in probes)
     assert command_probe.mutating_calls == ()
+
+
+def test_doctor_contract_includes_isolation() -> None:
+    assert DoctorCheck.ISOLATION.value == "isolation"
+
+
+def test_doctor_rejects_a_mutation_disguised_as_an_inspection() -> None:
+    disguised_mutations = (
+        CommandSpec(
+            argv=("docker", "desktop", "start"),
+            cwd=ABSOLUTE_CWD,
+            env={"PATH": "/synthetic/bin"},
+            timeout_seconds=5,
+            max_output_bytes=4096,
+            mutating=False,
+        ),
+        CommandSpec(
+            argv=("synthetic-probe", "daemon"),
+            cwd=ABSOLUTE_CWD,
+            env={"PATH": "/attacker-controlled/bin"},
+            timeout_seconds=5,
+            max_output_bytes=4096,
+            mutating=False,
+        ),
+    )
+
+    for disguised_mutation in disguised_mutations:
+        with pytest.raises(ValueError, match="registered read-only command"):
+            DoctorProbe(check=DoctorCheck.DAEMON, command=disguised_mutation)
 
 
 def test_doctor_fails_closed_for_missing_configuration_and_probe_errors() -> None:
@@ -193,6 +242,15 @@ def test_doctor_fails_closed_for_missing_configuration_and_probe_errors() -> Non
 
     assert errored.exit_code == 2
     assert all(fact.state is CheckState.ERROR for fact in errored.facts.values())
+
+    class InvalidProbe:
+        def run(self, command: CommandSpec) -> CommandResult:
+            raise ValueError(command.argv[0])
+
+    invalid = run_doctor(InvalidProbe(), _doctor_probes())
+
+    assert invalid.exit_code == 2
+    assert all(fact.state is CheckState.ERROR for fact in invalid.facts.values())
 
 
 def test_doctor_rejects_mutating_and_duplicate_probe_definitions() -> None:
@@ -250,6 +308,7 @@ def test_production_approval_store_has_no_path_or_environment_override(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     assert list(inspect.signature(ApprovalStore).parameters) == []
+    assert list(inspect.signature(ApprovalStore().check).parameters) == ["expected"]
     with pytest.raises(TypeError):
         ApprovalStore(Path("/tmp/not-allowed"))  # type: ignore[call-arg]
 
@@ -266,7 +325,7 @@ def test_approval_store_accepts_only_a_current_exact_private_receipt(
     _write_receipt(tmp_path, _receipt(binding))
     monkeypatch.setattr(approval, "_APPROVAL_ROOT", tmp_path)
 
-    assert ApprovalStore().check(binding, now=NOW) is ApprovalState.APPROVED
+    assert ApprovalStore().check(binding) is ApprovalState.APPROVED
 
 
 def test_approval_store_distinguishes_absent_expired_and_misbound(
@@ -277,7 +336,7 @@ def test_approval_store_distinguishes_absent_expired_and_misbound(
     monkeypatch.setattr(approval, "_APPROVAL_ROOT", tmp_path)
     store = ApprovalStore()
 
-    assert store.check(binding, now=NOW) is ApprovalState.ABSENT
+    assert store.check(binding) is ApprovalState.ABSENT
 
     _write_receipt(
         tmp_path,
@@ -287,12 +346,12 @@ def test_approval_store_distinguishes_absent_expired_and_misbound(
             expires_at=NOW - timedelta(minutes=1),
         ),
     )
-    assert store.check(binding, now=NOW) is ApprovalState.EXPIRED
+    assert store.check(binding) is ApprovalState.EXPIRED
 
     changed = _receipt(binding)
     changed["spec_sha256"] = "d" * 64
     _write_receipt(tmp_path, changed)
-    assert store.check(binding, now=NOW) is ApprovalState.MISBOUND
+    assert store.check(binding) is ApprovalState.MISBOUND
 
 
 @pytest.mark.parametrize(
@@ -317,9 +376,9 @@ def test_approval_store_fails_closed_on_untrusted_file_metadata_or_shape(
     monkeypatch.setattr(approval, "_APPROVAL_ROOT", tmp_path)
     if mutation == "wrong-owner":
         owner = path.stat().st_uid
-        monkeypatch.setattr(approval.os, "getuid", lambda: owner + 1)
+        monkeypatch.setattr(approval, "_alex_uid", lambda: owner + 1)
 
-    assert ApprovalStore().check(binding, now=NOW) is ApprovalState.MISBOUND
+    assert ApprovalStore().check(binding) is ApprovalState.MISBOUND
 
 
 def test_approval_store_rejects_symlinked_receipt(
@@ -333,7 +392,7 @@ def test_approval_store_rejects_symlinked_receipt(
     (tmp_path / "g1.json").symlink_to(target)
     monkeypatch.setattr(approval, "_APPROVAL_ROOT", tmp_path)
 
-    assert ApprovalStore().check(binding, now=NOW) is ApprovalState.MISBOUND
+    assert ApprovalStore().check(binding) is ApprovalState.MISBOUND
 
 
 def test_approval_store_fails_closed_on_non_utf8_receipt(
@@ -345,7 +404,7 @@ def test_approval_store_fails_closed_on_non_utf8_receipt(
     path.chmod(0o600)
     monkeypatch.setattr(approval, "_APPROVAL_ROOT", tmp_path)
 
-    assert ApprovalStore().check(_binding(), now=NOW) is ApprovalState.MISBOUND
+    assert ApprovalStore().check(_binding()) is ApprovalState.MISBOUND
 
 
 def test_approval_store_fails_closed_on_invalid_clock(
@@ -355,11 +414,38 @@ def test_approval_store_fails_closed_on_invalid_clock(
     binding = _binding()
     _write_receipt(tmp_path, _receipt(binding))
     monkeypatch.setattr(approval, "_APPROVAL_ROOT", tmp_path)
+    monkeypatch.setattr(approval, "_utc_now", lambda: cast(datetime, "not-a-datetime"))
 
-    assert (
-        ApprovalStore().check(binding, now=cast(datetime, "not-a-datetime"))
-        is ApprovalState.MISBOUND
+    assert ApprovalStore().check(binding) is ApprovalState.MISBOUND
+
+
+def test_approval_store_rejects_duplicate_json_keys(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    binding = _binding()
+    receipt = _receipt(binding)
+    payload = json.dumps(receipt).replace(
+        '"decision": "approved"',
+        '"decision": "approved", "decision": "approved"',
     )
+    _write_receipt(tmp_path, payload)
+    monkeypatch.setattr(approval, "_APPROVAL_ROOT", tmp_path)
+
+    assert ApprovalStore().check(binding) is ApprovalState.MISBOUND
+
+
+def test_approval_store_rejects_timestamp_outside_schema_format(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    binding = _binding()
+    receipt = _receipt(binding)
+    receipt["approved_at"] = "2026-08-25 11:59:00+00:00"
+    _write_receipt(tmp_path, receipt)
+    monkeypatch.setattr(approval, "_APPROVAL_ROOT", tmp_path)
+
+    assert ApprovalStore().check(binding) is ApprovalState.MISBOUND
 
 
 def test_approved_mutation_invokes_the_injected_probe_once() -> None:
@@ -394,6 +480,45 @@ def test_approved_mutation_rejects_a_read_only_command_before_store_access() -> 
         )
 
     assert store.check_calls == ()
+
+
+def test_host_mutation_path_does_not_accept_an_injected_approval_store(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    assert "store" not in inspect.signature(run_host_approved_mutation).parameters
+    command = _command("start-sandbox", mutating=True)
+    probe = FakeCommandProbe(results={command.argv: _result()})
+    monkeypatch.setattr(approval, "_APPROVAL_ROOT", tmp_path)
+    monkeypatch.setattr(
+        approval,
+        "_G1_HOST_ACTION_REGISTRY",
+        frozenset({approval._host_action_key(command)}),
+    )
+
+    outcome = run_host_approved_mutation(
+        expected=_binding(),
+        probe=probe,
+        command=command,
+    )
+
+    assert outcome.approval_state is ApprovalState.ABSENT
+    assert outcome.invoked is False
+    assert probe.calls == ()
+
+
+def test_host_mutation_path_rejects_actions_absent_from_the_bound_commit() -> None:
+    command = _command("start-sandbox", mutating=True)
+    probe = FakeCommandProbe(results={command.argv: _result()})
+
+    with pytest.raises(ValueError, match="registered G1 host action"):
+        run_host_approved_mutation(
+            expected=_binding(),
+            probe=probe,
+            command=command,
+        )
+
+    assert probe.calls == ()
 
 
 def test_approval_schema_matches_the_closed_runtime_contract() -> None:
