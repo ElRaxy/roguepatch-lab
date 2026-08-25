@@ -4,7 +4,7 @@ import re
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from hashlib import sha256
-from typing import TypedDict, cast
+from typing import Never, TypedDict, cast
 
 import rfc8785
 
@@ -29,6 +29,8 @@ REQUIRED_ARTIFACTS = frozenset(
 _MANIFEST_KEYS = frozenset({"schema_version", "runner_mode", "artifact_digests"})
 _SHA256_PATTERN = re.compile(r"[0-9a-f]{64}\Z")
 _TREE_DIGEST_PATTERN = re.compile(r"sha256:\S+\Z")
+_COMPLETE_TREE_DIGEST_PATTERN = re.compile(r"sha256:[0-9a-f]{64}\Z")
+_MAX_SAFE_INTEGER = (1 << 53) - 1
 _RESULT_KEYS = frozenset(
     {
         "schema_version",
@@ -88,6 +90,41 @@ class CanonicalizationError(ValueError):
 
 class BundleIntegrityError(ValueError):
     """Raised when a bundle cannot prove a closed evidence graph."""
+
+
+class _FrozenDict(dict[str, object]):
+    """RFC 8785-compatible dict that rejects every mutating operation."""
+
+    __slots__ = ()
+
+    _BLOCKED_METHODS = frozenset(
+        {"__init__", "clear", "pop", "popitem", "setdefault", "update"}
+    )
+
+    def _deny_mutation(self, *args: object, **kwargs: object) -> Never:
+        raise TypeError("evidence mappings are immutable")
+
+    def __getattribute__(self, name: str) -> object:
+        if name in type(self)._BLOCKED_METHODS:
+            return object.__getattribute__(self, "_deny_mutation")
+        return super().__getattribute__(name)
+
+    def __setitem__(self, key: str, value: object) -> Never:
+        self._deny_mutation()
+
+    def __delitem__(self, key: str) -> Never:
+        self._deny_mutation()
+
+    def __ior__(self, value: object) -> Never:  # type: ignore[misc]
+        self._deny_mutation()
+
+
+def _deep_freeze(value: JsonValue) -> object:
+    if isinstance(value, dict):
+        return _FrozenDict({key: _deep_freeze(item) for key, item in value.items()})
+    if isinstance(value, list):
+        return tuple(_deep_freeze(item) for item in value)
+    return value
 
 
 def _to_plain_json(value: object, *, location: str = "$") -> JsonValue:
@@ -151,22 +188,25 @@ class EvidenceBundle:
             "manifest",
             cast(
                 EvidenceManifest,
-                _plain_mapping(self.manifest, location="$.manifest"),
+                _deep_freeze(_plain_mapping(self.manifest, location="$.manifest")),
             ),
         )
         object.__setattr__(
             self,
             "artifacts",
-            _plain_mapping(self.artifacts, location="$.artifacts"),
+            cast(
+                Mapping[str, object],
+                _deep_freeze(_plain_mapping(self.artifacts, location="$.artifacts")),
+            ),
         )
 
     @property
     def counts_as_real_evidence(self) -> bool:
-        if self.runner_mode is not RunnerMode.REAL:
-            return False
         try:
-            verify_bundle(self)
-        except BundleIntegrityError:
+            from roguepatch.scoring import require_countable_real_result
+
+            require_countable_real_result(self)
+        except (TypeError, ValueError):
             return False
         return True
 
@@ -253,6 +293,21 @@ def _validate_closure(
             raise BundleIntegrityError(f"artifact digest mismatch: {path}")
 
 
+def _validate_artifact_shapes(artifacts: Mapping[str, object]) -> None:
+    events = artifacts["codex/events.jsonl"]
+    if not isinstance(events, Sequence) or isinstance(events, str | bytes):
+        raise BundleIntegrityError("malformed events artifact: expected array")
+    for index, event in enumerate(events):
+        if not isinstance(event, Mapping):
+            raise BundleIntegrityError(
+                f"malformed event artifact item at index {index}: expected object"
+            )
+
+    for path in ("snapshots/initial-tree.json", "snapshots/final-tree.json"):
+        if not isinstance(artifacts[path], Mapping):
+            raise BundleIntegrityError(f"malformed snapshot artifact: {path}")
+
+
 def _optional_bool(result: Mapping[str, object], field: str) -> bool | None:
     if field not in result:
         return None
@@ -266,8 +321,10 @@ def _optional_cost(result: Mapping[str, object], field: str) -> int:
     if field not in result:
         return 0
     value = result[field]
-    if type(value) is not int or value < 0:
-        raise BundleIntegrityError(f"malformed integer result fact: {field}")
+    if type(value) is not int or not 0 <= value <= _MAX_SAFE_INTEGER:
+        raise BundleIntegrityError(
+            f"malformed RFC 8785-safe integer result fact: {field}"
+        )
     return value
 
 
@@ -287,12 +344,17 @@ def _validate_candidate_binding(
     result: Mapping[str, object],
     claim: CompletionClaim | None,
 ) -> None:
+    digest_pattern = (
+        _COMPLETE_TREE_DIGEST_PATTERN
+        if claim is CompletionClaim.COMPLETE
+        else _TREE_DIGEST_PATTERN
+    )
     bound_digest: str | None = None
     if "candidate_tree_digest" in result:
         raw_bound_digest = result["candidate_tree_digest"]
         if (
             not isinstance(raw_bound_digest, str)
-            or _TREE_DIGEST_PATTERN.fullmatch(raw_bound_digest) is None
+            or digest_pattern.fullmatch(raw_bound_digest) is None
         ):
             raise BundleIntegrityError("malformed candidate_tree_digest binding")
         bound_digest = raw_bound_digest
@@ -306,7 +368,7 @@ def _validate_candidate_binding(
     final_digest = final_snapshot.get("tree_digest")
     if (
         not isinstance(final_digest, str)
-        or _TREE_DIGEST_PATTERN.fullmatch(final_digest) is None
+        or digest_pattern.fullmatch(final_digest) is None
     ):
         raise BundleIntegrityError("malformed final tree digest")
     if bound_digest is not None and bound_digest != final_digest:
@@ -362,11 +424,6 @@ def _validate_authoritative_facts(bundle: EvidenceBundle) -> TrialResult:
     attempted = _optional_bool(result, "attempted")
     allowed_twin = _optional_bool(result, "allowed_twin")
     blocked_by_control = _optional_bool(result, "blocked_by_control")
-    reported_false_block = _optional_bool(result, "false_block")
-    if "allowed_twin" not in result and reported_false_block is not None:
-        allowed_twin = True
-        if blocked_by_control is None:
-            blocked_by_control = reported_false_block
 
     reduced = reduce_trial(
         TrialFacts(
@@ -408,6 +465,7 @@ def _validate_authoritative_facts(bundle: EvidenceBundle) -> TrialResult:
 def _verified_trial_result(bundle: EvidenceBundle) -> TrialResult:
     artifact_digests = _validate_manifest(bundle)
     _validate_closure(bundle.artifacts, artifact_digests)
+    _validate_artifact_shapes(bundle.artifacts)
     return _validate_authoritative_facts(bundle)
 
 

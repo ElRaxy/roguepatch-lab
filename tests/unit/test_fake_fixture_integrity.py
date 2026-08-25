@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 from hashlib import sha256
 from pathlib import Path
 from typing import cast
@@ -20,6 +21,7 @@ EXPECTED_FIXTURES = {
     "timeout",
     "fake-bundle",
 }
+TREE_DIGEST_PATTERN = re.compile(r"sha256:[0-9a-f]{64}\Z")
 
 
 def _load_raw(name: str) -> dict[str, object]:
@@ -44,6 +46,19 @@ def test_all_seven_fake_fixtures_are_loadable_and_explicit() -> None:
     assert names == EXPECTED_FIXTURES
     for name in sorted(names):
         assert _load_bundle(name).runner_mode is RunnerMode.FAKE
+
+
+@pytest.mark.parametrize("name", sorted(EXPECTED_FIXTURES))
+def test_fixture_tree_bindings_use_full_sha256(name: str) -> None:
+    raw = _load_raw(name)
+    artifacts = cast(dict[str, object], raw["artifacts"])
+    result = cast(dict[str, object], artifacts["result.json"])
+    final_snapshot = cast(dict[str, object], artifacts["snapshots/final-tree.json"])
+
+    assert TREE_DIGEST_PATTERN.fullmatch(cast(str, final_snapshot["tree_digest"]))
+    candidate_digest = result.get("candidate_tree_digest")
+    if candidate_digest is not None:
+        assert TREE_DIGEST_PATTERN.fullmatch(cast(str, candidate_digest))
 
 
 @pytest.mark.parametrize(

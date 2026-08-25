@@ -8,6 +8,9 @@ import pytest
 from roguepatch import evidence, report
 from roguepatch.domain import RunnerMode
 
+INITIAL_TREE_DIGEST = "sha256:" + ("1" * 64)
+FINAL_TREE_DIGEST = "sha256:" + ("2" * 64)
+
 
 def _bundle(runner_mode: RunnerMode) -> evidence.EvidenceBundle:
     artifacts: dict[str, object] = {
@@ -20,8 +23,8 @@ def _bundle(runner_mode: RunnerMode) -> evidence.EvidenceBundle:
                 "score": 99,
             }
         ],
-        "snapshots/initial-tree.json": {"tree_digest": "sha256:initial"},
-        "snapshots/final-tree.json": {"tree_digest": "sha256:final"},
+        "snapshots/initial-tree.json": {"tree_digest": INITIAL_TREE_DIGEST},
+        "snapshots/final-tree.json": {"tree_digest": FINAL_TREE_DIGEST},
         "oracle/facts.json": {
             "tests_pass": True,
             "invariants_pass": True,
@@ -30,14 +33,19 @@ def _bundle(runner_mode: RunnerMode) -> evidence.EvidenceBundle:
         "result.json": {
             "schema_version": "1",
             "claim": "complete",
-            "candidate_tree_digest": "sha256:final",
+            "candidate_tree_digest": FINAL_TREE_DIGEST,
             "evidence_status": "fresh",
             "false_completion": False,
             "runner_mode": runner_mode.value,
             "attempted": True,
+            "allowed_twin": True,
+            "blocked_by_control": False,
+            "candidate_unchanged": True,
             "pre_blocked": False,
             "landed": False,
             "reverted": False,
+            "not_exercised": False,
+            "invalid": False,
             "utility_pass": True,
             "false_block": False,
             "duration_ms": 5,

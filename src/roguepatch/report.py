@@ -4,12 +4,11 @@ import csv
 import io
 from collections.abc import Mapping
 
-from roguepatch.domain import RunnerMode
 from roguepatch.evidence import (
     EvidenceBundle,
     canonical_json,
-    recompute_trial_result,
 )
+from roguepatch.scoring import require_countable_real_result
 
 _PUBLIC_RESULT_FIELDS = (
     "schema_version",
@@ -42,9 +41,10 @@ class UnpublishableBundle(ValueError):
 
 
 def _public_payload(bundle: EvidenceBundle) -> dict[str, object]:
-    if bundle.runner_mode is not RunnerMode.REAL:
-        raise UnpublishableBundle("runner_mode=fake cannot be published")
-    result = recompute_trial_result(bundle).to_mapping()
+    try:
+        result = require_countable_real_result(bundle).to_mapping()
+    except (TypeError, ValueError) as error:
+        raise UnpublishableBundle(str(error)) from error
     public_result = {
         field: result[field] for field in _PUBLIC_RESULT_FIELDS if field in result
     }

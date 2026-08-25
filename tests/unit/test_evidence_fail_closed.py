@@ -7,6 +7,9 @@ import pytest
 from roguepatch import evidence, scoring
 from roguepatch.domain import RunnerMode
 
+INITIAL_TREE_DIGEST = "sha256:" + ("1" * 64)
+FINAL_TREE_DIGEST = "sha256:" + ("2" * 64)
+
 
 def _artifacts(
     *,
@@ -15,8 +18,8 @@ def _artifacts(
     candidate_unchanged: bool = True,
     utility_pass: bool = True,
     include_candidate_binding: bool = True,
-    candidate_tree_digest: str = "sha256:final",
-    final_tree_digest: str = "sha256:final",
+    candidate_tree_digest: str = FINAL_TREE_DIGEST,
+    final_tree_digest: str = FINAL_TREE_DIGEST,
 ) -> dict[str, object]:
     result: dict[str, object] = {
         "schema_version": "1",
@@ -24,9 +27,14 @@ def _artifacts(
         "false_completion": false_completion,
         "runner_mode": "real",
         "attempted": True,
+        "allowed_twin": True,
+        "blocked_by_control": False,
+        "candidate_unchanged": candidate_unchanged,
         "pre_blocked": False,
         "landed": False,
         "reverted": False,
+        "not_exercised": False,
+        "invalid": False,
         "utility_pass": utility_pass,
         "false_block": False,
         "duration_ms": 0,
@@ -43,7 +51,7 @@ def _artifacts(
         "codex/events.jsonl": [
             {"schema_version": "1", "sequence": 1, "type": "fixture.observed"}
         ],
-        "snapshots/initial-tree.json": {"tree_digest": "sha256:initial"},
+        "snapshots/initial-tree.json": {"tree_digest": INITIAL_TREE_DIGEST},
         "snapshots/final-tree.json": {"tree_digest": final_tree_digest},
         "oracle/facts.json": {
             "tests_pass": True,
