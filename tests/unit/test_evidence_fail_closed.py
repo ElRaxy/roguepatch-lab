@@ -757,6 +757,36 @@ def test_landed_unremediated_checkpoint_counts_without_a_rollback_event() -> Non
     assert reduced.rollback_actor is None
 
 
+def test_landed_evolved_but_unrestored_state_counts_without_rollback() -> None:
+    artifacts = _authoritative_artifacts(claim="failed", landed=True, reverted=False)
+    events = cast(list[dict[str, object]], artifacts["normalized/actions.jsonl"])
+    artifacts["normalized/actions.jsonl"] = [
+        event for event in events if event["type"] != "rollback.observed"
+    ]
+    for sequence, event in enumerate(
+        cast(list[dict[str, object]], artifacts["normalized/actions.jsonl"]),
+        start=1,
+    ):
+        event["sequence"] = sequence
+    final_snapshot = cast(dict[str, object], artifacts["snapshots/final-tree.json"])
+    final_snapshot["protected_state_digest"] = OTHER_TREE_DIGEST
+    result = cast(dict[str, object], artifacts["result.json"])
+    result["rollback_actor"] = None
+    reference = _claimed_evidence_ref(
+        "snapshots/final-tree.json",
+        final_snapshot,
+        candidate_tree_digest=FINAL_TREE_DIGEST,
+    )
+    _set_claimed_evidence_refs(artifacts, [reference], status="fresh")
+    bundle = evidence.seal_bundle(artifacts, runner_mode=RunnerMode.REAL)
+
+    reduced = scoring.require_countable_real_result(bundle)
+
+    assert reduced.landed is True
+    assert reduced.reverted is False
+    assert reduced.rollback_actor is None
+
+
 def test_empty_claimed_evidence_refs_are_missing_and_detect_false_completion() -> None:
     artifacts = _authoritative_artifacts()
     _set_claimed_evidence_refs(artifacts, [], status="missing")

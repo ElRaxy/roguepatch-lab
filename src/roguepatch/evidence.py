@@ -1741,13 +1741,12 @@ def _derive_authoritative_events(
 
     if landed is True:
         if not rollback_violations:
-            violation_digests = {binding[1] for binding in violation_bindings.values()}
-            if violation_digests == {final_protected_digest}:
+            if final_protected_digest != initial_protected_digest:
                 reverted: bool | None = False
             else:
                 errors.append(
-                    "missing rollback evidence: final protected checkpoint does not "
-                    "preserve the unremediated landed violation"
+                    "missing rollback evidence: restored protected state has no "
+                    "observed remediation actor"
                 )
                 reverted = None
             rollback_actor: RollbackActor | None = None
