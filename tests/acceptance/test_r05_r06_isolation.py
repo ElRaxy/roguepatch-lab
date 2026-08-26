@@ -89,6 +89,9 @@ ORACLE = SandboxRef(role=SandboxRole.ORACLE, microvm_id="sbx-oracle-1")
 ORACLE_ENGINE_IDENTITY_SHA256 = sha256(
     b"synthetic-sbx-oracle-private-engine"
 ).hexdigest()
+OTHER_ORACLE_ENGINE_IDENTITY_SHA256 = sha256(
+    b"synthetic-sbx-other-private-engine"
+).hexdigest()
 CANDIDATE_PATH = PurePosixPath("/candidate")
 DOCKER_SOCKET_PATH = PurePosixPath("/var/run/docker.sock")
 RESOLVER_ACTION_ID = "g1.source.resolve"
@@ -550,6 +553,11 @@ class F1ExecutorSpy:
         observation = SandboxCreateObservation(
             sandbox=sandbox,
             request_sha256=bound_request.sha256,
+            engine_identity_sha256=(
+                ORACLE_ENGINE_IDENTITY_SHA256
+                if request.role is SandboxRole.ORACLE
+                else None
+            ),
             create_result=create_result,
         )
         if self.create_observation_mutator is not None:
@@ -1325,6 +1333,8 @@ def _different_identity_value(field_name: str, value: object) -> object:
             return "g1.sbx.synthetic-different"
         if field_name == "microvm_id":
             return "sbx-synthetic-different"
+        if field_name == "engine_identity_sha256":
+            return OTHER_ORACLE_ENGINE_IDENTITY_SHA256
         return (
             ("sha256:" + OTHER_DIGEST) if value.startswith("sha256:") else OTHER_DIGEST
         )
@@ -1333,6 +1343,8 @@ def _different_identity_value(field_name: str, value: object) -> object:
     if isinstance(value, tuple):
         return (*value, LAB_ROOT / "different")
     if value is None:
+        if field_name == "engine_identity_sha256":
+            return ORACLE_ENGINE_IDENTITY_SHA256
         return SOURCE_DIGEST
     raise AssertionError(f"no identity mutation for {type(value).__name__}")
 
@@ -1536,6 +1548,7 @@ def test_r6_create_and_checker_records_are_canonical_and_domain_separated() -> N
         "schema_version": "roguepatch.sandbox-create-observation.v1",
         "sandbox": {"role": SandboxRole.AGENT.value, "microvm_id": AGENT.microvm_id},
         "request_sha256": agent_request.sha256,
+        "engine_identity_sha256": None,
         "create_result": {
             "returncode": 0,
             "stdout": f"created:{AGENT.microvm_id}",
@@ -1551,6 +1564,7 @@ def test_r6_create_and_checker_records_are_canonical_and_domain_separated() -> N
             "microvm_id": ORACLE.microvm_id,
         },
         "request_sha256": oracle_request.sha256,
+        "engine_identity_sha256": ORACLE_ENGINE_IDENTITY_SHA256,
         "create_result": {
             "returncode": 0,
             "stdout": f"created:{ORACLE.microvm_id}",
@@ -1659,15 +1673,20 @@ def test_r6_oracle_boundary_probe() -> None:
     assert oracle_request.private_engine is True
     assert agent_create.sandbox == facts.agent
     assert agent_create.request_sha256 == agent_request.sha256
+    assert agent_create.engine_identity_sha256 is None
     assert oracle_create.sandbox == facts.oracle
     assert oracle_create.request_sha256 == oracle_request.sha256
+    assert oracle_create.engine_identity_sha256 == ORACLE_ENGINE_IDENTITY_SHA256
     assert checker_observation.sandbox == facts.oracle
     assert checker_observation.container == facts.container
     assert checker_observation.action_registry_sha256 == facts.action_registry_sha256
     assert checker_observation.candidate_path == CANDIDATE_PATH
     assert checker_observation.observed_digest_before == SOURCE_DIGEST
     assert checker_observation.observed_digest_after == SOURCE_DIGEST
-    assert checker_observation.engine_identity_sha256 == ORACLE_ENGINE_IDENTITY_SHA256
+    assert (
+        checker_observation.engine_identity_sha256
+        == oracle_create.engine_identity_sha256
+    )
     assert checker_observation.private_engine is True
     assert checker_observation.host_engine_reachable is False
     assert checker_observation.shared_socket is False
@@ -1798,6 +1817,11 @@ def test_r6_oracle_boundary_probe() -> None:
         pytest.param("create-trace", SandboxRole.AGENT, id="create-trace"),
         pytest.param("agent-sandbox", SandboxRole.AGENT, id="agent-sandbox"),
         pytest.param(
+            "agent-engine-identity-present",
+            SandboxRole.AGENT,
+            id="agent-engine-identity-present",
+        ),
+        pytest.param(
             "oracle-request-digest",
             SandboxRole.ORACLE,
             id="oracle-request-digest",
@@ -1816,6 +1840,11 @@ def test_r6_oracle_boundary_probe() -> None:
             "oracle-sandbox",
             SandboxRole.ORACLE,
             id="oracle-sandbox",
+        ),
+        pytest.param(
+            "oracle-engine-identity-missing",
+            SandboxRole.ORACLE,
+            id="oracle-engine-identity-missing",
         ),
         pytest.param(
             "oracle-container",
@@ -1906,6 +1935,14 @@ def test_r6_create_binding_mutants_fail_closed_and_cleanup(
                 ),
             )
         if (
+            defect == "agent-engine-identity-present"
+            and observation.sandbox.role is SandboxRole.AGENT
+        ):
+            return replace(
+                observation,
+                engine_identity_sha256=OTHER_ORACLE_ENGINE_IDENTITY_SHA256,
+            )
+        if (
             defect == "oracle-sandbox"
             and observation.sandbox.role is SandboxRole.ORACLE
         ):
@@ -1916,6 +1953,11 @@ def test_r6_create_binding_mutants_fail_closed_and_cleanup(
                     microvm_id="sbx-oracle-misbound",
                 ),
             )
+        if (
+            defect == "oracle-engine-identity-missing"
+            and observation.sandbox.role is SandboxRole.ORACLE
+        ):
+            return replace(observation, engine_identity_sha256=None)
         return observation
 
     create_result: CommandResult | None = None
@@ -2044,7 +2086,10 @@ def test_r6_checker_observation_mutants_fail_closed_and_cleanup(defect: str) -> 
                 candidate_path=PurePosixPath("/tmp/candidate"),
             )
         if defect == "engine-identity":
-            return replace(observation, engine_identity_sha256=OTHER_DIGEST)
+            return replace(
+                observation,
+                engine_identity_sha256=OTHER_ORACLE_ENGINE_IDENTITY_SHA256,
+            )
         if defect == "action-registry":
             return replace(observation, action_registry_sha256=OTHER_DIGEST)
         if defect == "docker-probe-path":
