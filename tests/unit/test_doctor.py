@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import importlib.util
 import inspect
 import json
 import os
+import sys
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from hashlib import sha256
@@ -12,7 +14,23 @@ from typing import cast
 import pytest
 
 from roguepatch import approval
+from roguepatch import doctor as doctor_module
+from roguepatch.adapters import docker_oracle
+from roguepatch.adapters.docker_oracle import (
+    SandboxCreateObservation,
+    SandboxCreateRequest,
+    run_f1_oracle_sequence,
+)
 from roguepatch.adapters.fake_backend import FakeApprovalStore, FakeCommandProbe
+from roguepatch.adapters.sbx_backend import (
+    F1ExecutionStatus,
+    InMemoryF1TraceSink,
+    ResourceLimits,
+    SandboxRef,
+    SandboxRole,
+    SandboxUnavailable,
+    SbxBackend,
+)
 from roguepatch.approval import (
     ApprovalBinding,
     ApprovalState,
@@ -27,6 +45,7 @@ from roguepatch.approval import (
 )
 from roguepatch.doctor import (
     CheckState,
+    DaemonIsolationFacts,
     DiskPreflightFacts,
     DoctorCheck,
     DoctorProbe,
@@ -35,8 +54,19 @@ from roguepatch.doctor import (
     SandboxResourceFacts,
     evaluate_live_preflight,
     run_doctor,
+    validate_live_daemon_boundary,
 )
 from roguepatch.ports import CommandResult, CommandSpec
+
+_FROZEN_F1_PATH = Path(__file__).parents[1] / "acceptance/test_r05_r06_isolation.py"
+_FROZEN_F1_SPEC = importlib.util.spec_from_file_location(
+    "roguepatch_frozen_f1_contract",
+    _FROZEN_F1_PATH,
+)
+assert _FROZEN_F1_SPEC is not None and _FROZEN_F1_SPEC.loader is not None
+frozen_f1 = importlib.util.module_from_spec(_FROZEN_F1_SPEC)
+sys.modules[_FROZEN_F1_SPEC.name] = frozen_f1
+_FROZEN_F1_SPEC.loader.exec_module(frozen_f1)
 
 NOW = datetime(2026, 8, 25, 12, 0, tzinfo=UTC)
 ABSOLUTE_CWD = Path("/synthetic/roguepatch")
@@ -282,6 +312,61 @@ def test_doctor_reports_ready_only_when_every_read_only_probe_succeeds() -> None
     assert all(fact.state is CheckState.READY for fact in report.facts.values())
     assert command_probe.calls == tuple(probe.command for probe in probes)
     assert command_probe.mutating_calls == ()
+
+
+def test_r1_daemon_ready_requires_private_oracle_engine() -> None:
+    probes = _doctor_probes()
+    report = run_doctor(
+        FakeCommandProbe(
+            results={probe.command.argv: _result() for probe in probes},
+        ),
+        probes,
+    )
+    registry_digest = "3" * 64
+    observation_digest = "1" * 64
+    engine_digest = "2" * 64
+    facts = DaemonIsolationFacts(
+        action_id="g1.sbx.oracle.engine-identity",
+        sandbox_role="oracle",
+        isolation_scope="microvm",
+        oracle_microvm_id="oracle-vm-observed-001",
+        engine_identity_observation_sha256=observation_digest,
+        engine_identity_trace_result_sha256=observation_digest,
+        engine_identity_sha256=engine_digest,
+        checker_engine_identity_sha256=engine_digest,
+        action_registry_sha256=registry_digest,
+        engine_identity_action_registry_sha256=registry_digest,
+        private_engine_observed=True,
+        docker_desktop_observed=False,
+        host_daemon_accessible=False,
+        shared_socket_observed=False,
+    )
+
+    assert report.ready is True
+    assert report.fact_for(DoctorCheck.DAEMON).state is CheckState.READY
+    with pytest.raises((TypeError, ValueError), match="daemon|facts|isolation"):
+        validate_live_daemon_boundary(report, None)
+    assert validate_live_daemon_boundary(report, facts) is None
+
+    rejected_mutations: tuple[tuple[str, object], ...] = (
+        ("action_id", "g1.sbx.oracle.checker"),
+        ("sandbox_role", "agent"),
+        ("isolation_scope", "host"),
+        ("oracle_microvm_id", ""),
+        ("oracle_microvm_id", "   "),
+        ("engine_identity_trace_result_sha256", "4" * 64),
+        ("checker_engine_identity_sha256", "4" * 64),
+        ("engine_identity_action_registry_sha256", "4" * 64),
+        ("private_engine_observed", False),
+        ("docker_desktop_observed", True),
+        ("host_daemon_accessible", True),
+        ("shared_socket_observed", True),
+    )
+    for field, value in rejected_mutations:
+        with pytest.raises(
+            ValueError, match="daemon|engine|oracle|microvm|digest|socket"
+        ):
+            validate_live_daemon_boundary(report, replace(facts, **{field: value}))
 
 
 def test_doctor_contract_includes_isolation() -> None:
@@ -1015,3 +1100,1101 @@ def test_approval_schema_matches_the_closed_runtime_contract() -> None:
     assert schema["properties"]["decision"] == {"const": "approved"}
     assert schema["properties"]["host_fingerprint_sha256"]["pattern"]
     assert schema["properties"]["action_registry_sha256"]["pattern"]
+
+
+def _closed_g1_registry(
+    *,
+    changed_action_id: str | None = None,
+    mutated_mutability_action_id: str | None = None,
+) -> frozenset[G1HostAction]:
+    def command_factory(action_id: str) -> CommandSpec:
+        suffix = f"{action_id}-drifted" if action_id == changed_action_id else action_id
+        expected_mutating = action_id in frozen_f1.MUTATING_ACTION_IDS
+        return CommandSpec(
+            argv=("sbx", suffix),
+            cwd=ABSOLUTE_CWD,
+            env={"PATH": "/synthetic/bin"},
+            timeout_seconds=5,
+            max_output_bytes=4096,
+            mutating=(
+                not expected_mutating
+                if action_id == mutated_mutability_action_id
+                else expected_mutating
+            ),
+        )
+
+    return approval.build_g1_action_registry(command_factory=command_factory)
+
+
+def test_g1_registry_accepts_only_the_closed_21_action_mutability_policy() -> None:
+    registry = _closed_g1_registry()
+
+    assert len(registry) == 21
+    assert {action.action_id for action in registry} == set(approval.G1_ACTION_IDS)
+    assert {
+        action.action_id for action in registry if action.command.mutating
+    } == frozen_f1.MUTATING_ACTION_IDS
+
+
+@pytest.mark.parametrize("mutated_action_id", approval.G1_ACTION_IDS)
+def test_g1_registry_rejects_each_inverted_action_mutability(
+    mutated_action_id: str,
+) -> None:
+    with pytest.raises(ValueError, match="mutating"):
+        _closed_g1_registry(mutated_mutability_action_id=mutated_action_id)
+
+
+def test_public_g1_registry_authority_rejects_partial_registry() -> None:
+    registry = _closed_g1_registry()
+    partial = frozenset(
+        action for action in registry if action.action_id != "g1.sbx.oracle.destroy"
+    )
+    validator = getattr(approval, "validate_g1_action_registry", lambda _value: None)
+
+    with pytest.raises(ValueError, match="exact closed G1"):
+        validator(partial)
+
+
+def test_public_g1_registry_authority_binds_exact_command_specs() -> None:
+    registry = _closed_g1_registry()
+    validated = getattr(approval, "validate_g1_action_registry", lambda value: value)(
+        registry
+    )
+    changed = next(
+        action
+        for action in _closed_g1_registry(changed_action_id="g1.sbx.agent.create")
+        if action.action_id == "g1.sbx.agent.create"
+    )
+
+    require_action = getattr(validated, "require_action", lambda action: action)
+    with pytest.raises(ValueError, match="exactly registered"):
+        require_action(changed)
+
+
+def test_public_digest_api_preserves_frozen_private_compatibility() -> None:
+    registry = _closed_g1_registry()
+    public_command_digest = getattr(approval, "command_spec_sha256", lambda _value: "")
+    public_registry_payload = getattr(
+        approval,
+        "canonical_action_registry_payload",
+        lambda _value: b"",
+    )
+    public_registry_digest = getattr(
+        approval,
+        "action_registry_sha256",
+        lambda _value: "",
+    )
+    action = next(iter(registry))
+
+    assert public_command_digest(action.command) == approval._command_spec_sha256(
+        action.command
+    )
+    assert public_registry_payload(
+        registry
+    ) == approval._canonical_action_registry_payload(registry)
+    assert public_registry_digest(registry) == approval._action_registry_sha256(
+        registry
+    )
+
+
+def test_source_proof_registry_mismatch_is_rejected_before_create() -> None:
+    agent_spec = frozen_f1._agent_spec()
+    changed_record = replace(
+        agent_spec.source_resolution_record,
+        action_registry_sha256=frozen_f1.OTHER_DIGEST,
+    )
+    changed_proof = replace(
+        agent_spec.source_path_proof,
+        action_registry_sha256=frozen_f1.OTHER_DIGEST,
+        execution_record_sha256=changed_record.sha256,
+    )
+    changed_spec = replace(
+        agent_spec,
+        source_path_proof=changed_proof,
+        source_resolution_record=changed_record,
+    )
+    executor = frozen_f1.F1ExecutorSpy()
+
+    with pytest.raises(ValueError, match="source proof.*registry"):
+        run_f1_oracle_sequence(
+            gate=frozen_f1._live_gate(),
+            agent_spec=changed_spec,
+            oracle_container=frozen_f1._oracle_container(),
+            candidate_digest=frozen_f1.CANDIDATE_DIGEST,
+            action_registry=frozen_f1._g1_action_registry(),
+            disk_safety=executor,
+            executor=executor,
+        )
+
+    assert executor.calls == []
+    assert executor.disk_decisions == []
+
+
+@pytest.mark.parametrize(
+    "limits",
+    [
+        ResourceLimits(cpu_count=3, memory_mib=2048, max_output_bytes=131_072),
+        ResourceLimits(cpu_count=2, memory_mib=4096, max_output_bytes=131_072),
+    ],
+)
+def test_oracle_exact_limits_are_rejected_before_any_create(
+    limits: ResourceLimits,
+) -> None:
+    executor = frozen_f1.F1ExecutorSpy()
+    oracle_container = replace(frozen_f1._oracle_container(), limits=limits)
+
+    with pytest.raises(ValueError, match="exactly 2 CPU and 2048 MiB"):
+        run_f1_oracle_sequence(
+            gate=frozen_f1._live_gate(),
+            agent_spec=frozen_f1._agent_spec(),
+            oracle_container=oracle_container,
+            candidate_digest=frozen_f1.CANDIDATE_DIGEST,
+            action_registry=frozen_f1._g1_action_registry(),
+            disk_safety=executor,
+            executor=executor,
+        )
+
+    assert executor.calls == []
+    assert executor.disk_decisions == []
+
+
+class _InvalidCreateRefExecutor(frozen_f1.F1ExecutorSpy):
+    def __init__(self, *, invalid_role: SandboxRole) -> None:
+        super().__init__()
+        self.invalid_role = invalid_role
+
+    def create(
+        self,
+        *,
+        action: G1HostAction,
+        action_registry_sha256: str,
+        request: SandboxCreateRequest,
+    ) -> SandboxCreateObservation:
+        created = super().create(
+            action=action,
+            action_registry_sha256=action_registry_sha256,
+            request=request,
+        )
+        if request.role is self.invalid_role:
+            wrong_role = (
+                SandboxRole.ORACLE
+                if request.role is SandboxRole.AGENT
+                else SandboxRole.AGENT
+            )
+            return replace(
+                created,
+                sandbox=SandboxRef(
+                    role=wrong_role,
+                    microvm_id=created.sandbox.microvm_id,
+                ),
+            )
+        return created
+
+
+@pytest.mark.parametrize("role", [SandboxRole.AGENT, SandboxRole.ORACLE])
+def test_invalid_create_ref_is_cleaned_up_using_recoverable_identifier(
+    role: SandboxRole,
+) -> None:
+    executor = _InvalidCreateRefExecutor(invalid_role=role)
+
+    with pytest.raises(ValueError, match="create observation is not request-bound"):
+        frozen_f1._run_f1(gate=frozen_f1._live_gate(), executor=executor)
+
+    action_ids = [call[0].action_id for call in executor.calls]
+    create_id = f"g1.sbx.{role.value}.create"
+    destroy_id = f"g1.sbx.{role.value}.destroy"
+    assert action_ids[action_ids.index(create_id) + 1] == destroy_id
+
+
+class _MissingCreateTraceExecutor(frozen_f1.F1ExecutorSpy):
+    def create(
+        self,
+        *,
+        action: G1HostAction,
+        action_registry_sha256: str,
+        request: SandboxCreateRequest,
+    ) -> SandboxCreateObservation:
+        created = super().create(
+            action=action,
+            action_registry_sha256=action_registry_sha256,
+            request=request,
+        )
+        if request.role is SandboxRole.AGENT:
+            self.trace_records.pop()
+        return created
+
+
+def test_missing_create_trace_still_cleans_up_agent() -> None:
+    executor = _MissingCreateTraceExecutor()
+
+    with pytest.raises(ValueError, match="required trace record"):
+        frozen_f1._run_f1(gate=frozen_f1._live_gate(), executor=executor)
+
+    assert [call[0].action_id for call in executor.calls] == [
+        frozen_f1.AGENT_CREATE_ACTION_ID,
+        frozen_f1.AGENT_DESTROY_ACTION_ID,
+    ]
+
+
+class _MisboundCreateTraceExecutor(frozen_f1.F1ExecutorSpy):
+    def create(
+        self,
+        *,
+        action: G1HostAction,
+        action_registry_sha256: str,
+        request: SandboxCreateRequest,
+    ) -> SandboxCreateObservation:
+        created = super().create(
+            action=action,
+            action_registry_sha256=action_registry_sha256,
+            request=request,
+        )
+        if request.role is SandboxRole.AGENT:
+            self.trace_records[-1] = replace(
+                self.trace_records[-1],
+                action_registry_sha256=frozen_f1.OTHER_DIGEST,
+            )
+        return created
+
+
+def test_misbound_create_trace_still_cleans_up_agent() -> None:
+    executor = _MisboundCreateTraceExecutor()
+
+    with pytest.raises(ValueError, match="trace is not bound"):
+        frozen_f1._run_f1(gate=frozen_f1._live_gate(), executor=executor)
+
+    assert [call[0].action_id for call in executor.calls] == [
+        frozen_f1.AGENT_CREATE_ACTION_ID,
+        frozen_f1.AGENT_DESTROY_ACTION_ID,
+    ]
+
+
+def test_probe_trace_result_digest_is_bound_to_the_executor_record() -> None:
+    facts = frozen_f1._boundary_facts()
+    execution_record = facts.execution_records[0]
+    changed_result_digest = frozen_f1.OTHER_DIGEST
+    assert changed_result_digest != execution_record.result_digest
+    trace_records = list(facts.execution_trace.records)
+    trace_index = next(
+        index
+        for index, record in enumerate(trace_records)
+        if record.action_id == execution_record.action_id
+    )
+    trace_records[trace_index] = replace(
+        trace_records[trace_index],
+        result_digest=changed_result_digest,
+    )
+    changed_result_digests = dict(facts.action_result_digests)
+    changed_result_digests[execution_record.action_id] = changed_result_digest
+    changed_trace = frozen_f1._rechain_trace(trace_records)
+
+    with pytest.raises(ValueError, match="probe.*executor|result.*digest"):
+        docker_oracle.validate_oracle_boundary(
+            replace(
+                facts,
+                execution_trace=changed_trace,
+                action_result_digests=changed_result_digests,
+            )
+        )
+
+
+def test_non_host_canary_probe_rejects_mount_digest_without_object() -> None:
+    facts = frozen_f1._boundary_facts()
+    observations = list(facts.probe_observations)
+    probe_index = next(
+        index
+        for index, observation in enumerate(observations)
+        if observation.target is not frozen_f1.ProtectedTarget.HOST_CANARY
+    )
+    assert observations[probe_index].source_mount_observation is None
+    observations[probe_index] = replace(
+        observations[probe_index],
+        source_mount_observation_sha256=frozen_f1.OTHER_DIGEST,
+    )
+
+    with pytest.raises(ValueError, match="source mount.*host-canary|mount.*object"):
+        docker_oracle.validate_oracle_boundary(
+            replace(facts, probe_observations=tuple(observations))
+        )
+
+
+def test_invalid_create_ref_cleanup_failure_keeps_manual_reference() -> None:
+    cleanup_error = RuntimeError("synthetic cleanup failure after invalid ref")
+    executor = _InvalidCreateRefExecutor(invalid_role=SandboxRole.AGENT)
+    executor.failures[frozen_f1.AGENT_DESTROY_ACTION_ID] = cleanup_error
+
+    with pytest.raises(frozen_f1.OracleCleanupError) as raised:
+        frozen_f1._run_f1(gate=frozen_f1._live_gate(), executor=executor)
+
+    assert raised.value.cleanup_reference == frozen_f1.AGENT.microvm_id
+    assert raised.value.cleanup_error is cleanup_error
+    assert isinstance(raised.value.primary_error, ValueError)
+
+
+class _PostCreateDiskErrorExecutor(frozen_f1.F1ExecutorSpy):
+    def __init__(self, *, failing_role: SandboxRole) -> None:
+        super().__init__()
+        self.failing_role = failing_role
+
+    def evaluate_disk_safety(
+        self,
+        *,
+        role: SandboxRole,
+        phase: frozen_f1.DiskPhase,
+        create_invocations: int,
+    ) -> frozen_f1.DiskSafetyDecision:
+        if role is self.failing_role and phase == "post_create":
+            raise RuntimeError(f"synthetic disk authority failure: {role.value}")
+        return super().evaluate_disk_safety(
+            role=role,
+            phase=phase,
+            create_invocations=create_invocations,
+        )
+
+
+@pytest.mark.parametrize("role", [SandboxRole.AGENT, SandboxRole.ORACLE])
+def test_post_create_disk_authority_exception_still_destroys_vm(
+    role: SandboxRole,
+) -> None:
+    executor = _PostCreateDiskErrorExecutor(failing_role=role)
+
+    with pytest.raises(RuntimeError, match="disk authority failure"):
+        frozen_f1._run_f1(gate=frozen_f1._live_gate(), executor=executor)
+
+    action_ids = [call[0].action_id for call in executor.calls]
+    create_id = f"g1.sbx.{role.value}.create"
+    destroy_id = f"g1.sbx.{role.value}.destroy"
+    assert action_ids[action_ids.index(create_id) + 1] == destroy_id
+
+
+class _AbsentSandboxCreateObservationError(RuntimeError):
+    def __init__(
+        self,
+        message: str,
+        *,
+        sandbox: SandboxRef,
+        cause: Exception,
+    ) -> None:
+        super().__init__(message)
+        self.sandbox = sandbox
+        self.cause = cause
+
+
+class _PostEffectCreateErrorExecutor(frozen_f1.F1ExecutorSpy):
+    def __init__(self, *, failing_role: SandboxRole) -> None:
+        super().__init__()
+        self.failing_role = failing_role
+        self.create_cause = RuntimeError(
+            f"synthetic create observation failure: {failing_role.value}"
+        )
+        self.create_error: RuntimeError | None = None
+
+    def create(
+        self,
+        *,
+        action: G1HostAction,
+        action_registry_sha256: str,
+        request: SandboxCreateRequest,
+    ) -> SandboxCreateObservation:
+        observation = super().create(
+            action=action,
+            action_registry_sha256=action_registry_sha256,
+            request=request,
+        )
+        if request.role is self.failing_role:
+            error_type = getattr(
+                docker_oracle,
+                "SandboxCreateObservationError",
+                _AbsentSandboxCreateObservationError,
+            )
+            self.create_error = error_type(
+                "sandbox effect exists but create observation is unavailable",
+                sandbox=observation.sandbox,
+                cause=self.create_cause,
+            )
+            raise self.create_error from self.create_cause
+        return observation
+
+
+class _WrongRolePostEffectCreateErrorExecutor(frozen_f1.F1ExecutorSpy):
+    def __init__(self, *, failing_role: SandboxRole) -> None:
+        super().__init__()
+        self.failing_role = failing_role
+        self.create_error: docker_oracle.SandboxCreateObservationError | None = None
+
+    def create(
+        self,
+        *,
+        action: G1HostAction,
+        action_registry_sha256: str,
+        request: SandboxCreateRequest,
+    ) -> SandboxCreateObservation:
+        observation = super().create(
+            action=action,
+            action_registry_sha256=action_registry_sha256,
+            request=request,
+        )
+        if request.role is self.failing_role:
+            wrong_role = (
+                SandboxRole.ORACLE
+                if request.role is SandboxRole.AGENT
+                else SandboxRole.AGENT
+            )
+            self.create_error = docker_oracle.SandboxCreateObservationError(
+                "sandbox effect exists but its observation has the wrong role",
+                sandbox=SandboxRef(
+                    role=wrong_role,
+                    microvm_id=observation.sandbox.microvm_id,
+                ),
+                cause=RuntimeError("synthetic wrong-role create observation"),
+            )
+            raise self.create_error
+        return observation
+
+
+@pytest.mark.parametrize("role", [SandboxRole.AGENT, SandboxRole.ORACLE])
+def test_wrong_role_create_error_fails_closed_with_exact_manual_reference(
+    role: SandboxRole,
+) -> None:
+    executor = _WrongRolePostEffectCreateErrorExecutor(failing_role=role)
+    expected_ref = frozen_f1.AGENT if role is SandboxRole.AGENT else frozen_f1.ORACLE
+    destroy_action_id = f"g1.sbx.{role.value}.destroy"
+
+    with pytest.raises(frozen_f1.OracleCleanupError) as raised:
+        frozen_f1._run_f1(gate=frozen_f1._live_gate(), executor=executor)
+
+    assert executor.create_error is not None
+    assert executor.create_error.sandbox.role is not role
+    assert executor.create_error.sandbox.microvm_id == expected_ref.microvm_id
+    assert raised.value.disposition is frozen_f1.BatchDisposition.KILL
+    assert raised.value.cleanup_reference == expected_ref.microvm_id
+    assert raised.value.primary_error is executor.create_error
+    assert destroy_action_id not in [call[0].action_id for call in executor.calls]
+    assert all(
+        call[0].action_id == f"g1.sbx.{call[2].role.value}.destroy"
+        for call in executor.calls
+        if call[0].action_id.endswith(".destroy")
+    )
+
+
+@pytest.mark.parametrize("role", [SandboxRole.AGENT, SandboxRole.ORACLE])
+def test_post_effect_create_error_destroys_exact_recoverable_vm(
+    role: SandboxRole,
+) -> None:
+    executor = _PostEffectCreateErrorExecutor(failing_role=role)
+
+    with pytest.raises(RuntimeError) as raised:
+        frozen_f1._run_f1(gate=frozen_f1._live_gate(), executor=executor)
+
+    action_ids = [call[0].action_id for call in executor.calls]
+    create_id = f"g1.sbx.{role.value}.create"
+    destroy_id = f"g1.sbx.{role.value}.destroy"
+    assert action_ids[action_ids.index(create_id) + 1] == destroy_id
+    assert raised.value is executor.create_error
+    assert type(raised.value) is getattr(
+        docker_oracle,
+        "SandboxCreateObservationError",
+        None,
+    )
+    assert raised.value.sandbox.role is role
+    assert raised.value.cause is executor.create_cause
+    assert raised.value.__cause__ is executor.create_cause
+
+
+@pytest.mark.parametrize("role", [SandboxRole.AGENT, SandboxRole.ORACLE])
+def test_post_effect_create_cleanup_failure_preserves_manual_reference_and_primary(
+    role: SandboxRole,
+) -> None:
+    cleanup_error = RuntimeError(f"synthetic destroy failure: {role.value}")
+    executor = _PostEffectCreateErrorExecutor(failing_role=role)
+    executor.failures[f"g1.sbx.{role.value}.destroy"] = cleanup_error
+
+    with pytest.raises(frozen_f1.OracleCleanupError) as raised:
+        frozen_f1._run_f1(gate=frozen_f1._live_gate(), executor=executor)
+
+    assert executor.create_error is not None
+    assert raised.value.cleanup_reference == executor.create_error.sandbox.microvm_id
+    assert raised.value.cleanup_error is cleanup_error
+    assert raised.value.primary_error is executor.create_error
+
+
+def test_sbx_backend_rejects_partial_registry_before_probe() -> None:
+    registry = _closed_g1_registry()
+    partial = frozenset(
+        action for action in registry if action.action_id != "g1.sbx.oracle.destroy"
+    )
+    probe = FakeCommandProbe(results={})
+
+    with pytest.raises(ValueError, match="exact closed G1"):
+        SbxBackend(
+            action_registry=partial,
+            trace_sink=InMemoryF1TraceSink(),
+            command_probe=probe,
+        )
+
+    assert probe.calls == ()
+
+
+@pytest.mark.parametrize(
+    "result",
+    [
+        CommandResult(
+            returncode=1,
+            stdout="",
+            stderr="failed",
+            timed_out=False,
+            truncated=False,
+        ),
+        CommandResult(
+            returncode=None,
+            stdout="",
+            stderr="timeout",
+            timed_out=True,
+            truncated=False,
+        ),
+        CommandResult(
+            returncode=0,
+            stdout="partial",
+            stderr="",
+            timed_out=False,
+            truncated=True,
+        ),
+    ],
+)
+def test_sbx_backend_traces_then_fails_closed_on_unsafe_result(
+    result: CommandResult,
+) -> None:
+    registry = _closed_g1_registry()
+    action = next(item for item in registry if item.action_id == "g1.sbx.agent.create")
+    probe = FakeCommandProbe(results={action.command.argv: result})
+    trace_sink = InMemoryF1TraceSink()
+    backend = SbxBackend(
+        action_registry=registry,
+        trace_sink=trace_sink,
+        command_probe=probe,
+    )
+
+    with pytest.raises(SandboxUnavailable, match="registered SBX action failed"):
+        backend.execute_registered(
+            action=action,
+            sandbox=SandboxRef(role=SandboxRole.AGENT, microvm_id="agent-unit"),
+        )
+
+    assert probe.calls == (action.command,)
+    assert trace_sink.execution_trace.records[-1].status is F1ExecutionStatus.FAILED
+
+
+class _RaisingCommandProbe:
+    def __init__(self, error: Exception) -> None:
+        self.error = error
+        self.calls: list[CommandSpec] = []
+
+    def run(self, command: CommandSpec) -> CommandResult:
+        self.calls.append(command)
+        raise self.error
+
+
+def test_sbx_backend_probe_exception_emits_one_bound_failed_record() -> None:
+    registry = _closed_g1_registry()
+    action = next(item for item in registry if item.action_id == "g1.sbx.agent.create")
+    sandbox = SandboxRef(role=SandboxRole.AGENT, microvm_id="agent-probe-error")
+    probe_error = RuntimeError("synthetic command probe transport failure")
+    probe = _RaisingCommandProbe(probe_error)
+    trace_sink = InMemoryF1TraceSink()
+    backend = SbxBackend(
+        action_registry=registry,
+        trace_sink=trace_sink,
+        command_probe=probe,
+    )
+
+    with pytest.raises(
+        SandboxUnavailable, match="registered SBX action failed"
+    ) as raised:
+        backend.execute_registered(action=action, sandbox=sandbox)
+
+    assert raised.value.__cause__ is probe_error
+    assert probe.calls == [action.command]
+    assert len(trace_sink.execution_trace.records) == 1
+    record = trace_sink.execution_trace.records[0]
+    assert record.status is F1ExecutionStatus.FAILED
+    assert record.action_id == action.action_id
+    assert record.microvm_role is sandbox.role
+    assert record.microvm_id == sandbox.microvm_id
+    assert record.command_spec_digest == approval.command_spec_sha256(action.command)
+    assert record.action_registry_sha256 == approval.action_registry_sha256(registry)
+
+
+def test_sbx_backend_rejects_action_command_drift_without_probe_fallback() -> None:
+    registry = _closed_g1_registry()
+    registered = next(
+        item for item in registry if item.action_id == "g1.sbx.agent.create"
+    )
+    drifted = G1HostAction(
+        action_id=registered.action_id,
+        command=replace(
+            registered.command,
+            argv=("sbx", "g1.sbx.agent.create-drifted"),
+        ),
+    )
+    probe = FakeCommandProbe(results={})
+    backend = SbxBackend(
+        action_registry=registry,
+        trace_sink=InMemoryF1TraceSink(),
+        command_probe=probe,
+    )
+
+    with pytest.raises(ValueError, match="exactly registered"):
+        backend.execute_registered(
+            action=drifted,
+            sandbox=SandboxRef(role=SandboxRole.AGENT, microvm_id="agent-unit"),
+        )
+
+    assert probe.calls == ()
+
+
+DISCOVERY_RECEIPT_PATH = Path(
+    "/Users/alex/.codex/roguepatch-approvals/g1-discovery.json"
+)
+DISCOVERY_CONTROL_ROOT = Path("/Users/alex/.codex/roguepatch-control/v1/g1-discovery")
+DISCOVERY_SOURCE_PATH = Path(
+    "/Users/alex/RoguePatchLab/.roguepatch/public-fixtures/rp-001"
+)
+DISCOVERY_DIAGNOSTIC_VM_ID = "roguepatch-g1-discovery"
+DISCOVERY_BASELINE_ACTION_IDS = (
+    "g1-discovery.install-standalone",
+    "g1-discovery.inspect-read-only",
+)
+DISCOVERY_DIAGNOSTIC_ACTION_IDS = (
+    "g1-discovery.diagnostic-create",
+    "g1-discovery.diagnostic-exec",
+    "g1-discovery.diagnostic-destroy",
+)
+
+
+def _offline_discovery_command(action_id: str, *, mutating: bool) -> CommandSpec:
+    return CommandSpec(
+        argv=("offline-discovery-record", action_id),
+        cwd=ABSOLUTE_CWD,
+        env={"PATH": "/synthetic/bin"},
+        timeout_seconds=5,
+        max_output_bytes=4096,
+        mutating=mutating,
+    )
+
+
+def _offline_discovery_record(action_id: str, *, mutating: bool) -> object:
+    return doctor_module.G1DiscoveryActionRecord(
+        action_id=action_id,
+        command=_offline_discovery_command(action_id, mutating=mutating),
+    )
+
+
+def _offline_discovery_registry() -> object:
+    return doctor_module.build_g1_discovery_offline_registry(
+        records=(
+            _offline_discovery_record(
+                DISCOVERY_BASELINE_ACTION_IDS[0],
+                mutating=True,
+            ),
+            _offline_discovery_record(
+                DISCOVERY_BASELINE_ACTION_IDS[1],
+                mutating=False,
+            ),
+        ),
+        receipt_path=DISCOVERY_RECEIPT_PATH,
+        control_root=DISCOVERY_CONTROL_ROOT,
+        public_source_path=DISCOVERY_SOURCE_PATH,
+    )
+
+
+def _offline_discovery_diagnostic_profile() -> object:
+    return doctor_module.build_g1_discovery_diagnostic_profile(
+        records=(
+            _offline_discovery_record(
+                DISCOVERY_DIAGNOSTIC_ACTION_IDS[0],
+                mutating=True,
+            ),
+            _offline_discovery_record(
+                DISCOVERY_DIAGNOSTIC_ACTION_IDS[1],
+                mutating=False,
+            ),
+            _offline_discovery_record(
+                DISCOVERY_DIAGNOSTIC_ACTION_IDS[2],
+                mutating=True,
+            ),
+        ),
+        diagnostic_microvm_id=DISCOVERY_DIAGNOSTIC_VM_ID,
+        cleanup_required=True,
+    )
+
+
+def _discovery_receipt(
+    *,
+    registry: object,
+    diagnostic_profile: object | None,
+) -> object:
+    receipt = doctor_module.G1DiscoveryReceiptBinding(
+        approved_by="alex",
+        approved_at=NOW,
+        expires_at=NOW + timedelta(minutes=10),
+        spec_sha256="a" * 64,
+        plan_sha256="b" * 64,
+        repo_commit="c" * 40,
+        host_fingerprint_sha256=HOST_FINGERPRINT,
+        action_registry_sha256=registry.sha256,
+        diagnostic_profile_sha256=(
+            diagnostic_profile.sha256 if diagnostic_profile is not None else None
+        ),
+    )
+    return receipt
+
+
+def _discovery_authority_facts(*, diagnostic: bool = False) -> object:
+    registry = _offline_discovery_registry()
+    profile = _offline_discovery_diagnostic_profile() if diagnostic else None
+    return doctor_module.G1DiscoveryAuthorityFacts(
+        receipt_path=DISCOVERY_RECEIPT_PATH,
+        receipt_owner="alex",
+        receipt_mode=0o600,
+        observed_at=NOW,
+        expected_spec_sha256="a" * 64,
+        expected_plan_sha256="b" * 64,
+        expected_repo_commit="c" * 40,
+        expected_host_fingerprint_sha256=HOST_FINGERPRINT,
+        receipt=_discovery_receipt(
+            registry=registry,
+            diagnostic_profile=profile,
+        ),
+        action_registry=registry,
+        diagnostic_profile=profile,
+    )
+
+
+def test_r2_discovery_registry_and_receipt_are_exactly_bound() -> None:
+    facts = _discovery_authority_facts(diagnostic=True)
+    authority = doctor_module.validate_g1_discovery_authority(facts)
+    registry = facts.action_registry
+    diagnostic_profile = facts.diagnostic_profile
+    assert diagnostic_profile is not None
+    registry_payload = json.loads(registry.canonical_payload)
+    diagnostic_payload = json.loads(diagnostic_profile.canonical_payload)
+    receipt = facts.receipt
+    receipt_payload = json.loads(receipt.canonical_payload)
+
+    assert registry.schema_version == "roguepatch.g1-discovery-action-registry.v1"
+    assert registry_payload == {
+        "schema_version": "roguepatch.g1-discovery-action-registry.v1",
+        "receipt_path": str(DISCOVERY_RECEIPT_PATH),
+        "control_root": str(DISCOVERY_CONTROL_ROOT),
+        "public_source_path": str(DISCOVERY_SOURCE_PATH),
+        "actions": [
+            {
+                "action_id": record.action_id,
+                **approval.command_spec_payload(record.command),
+            }
+            for record in sorted(registry.records, key=lambda item: item.action_id)
+        ],
+    }
+    assert {record.action_id for record in registry.records} == set(
+        DISCOVERY_BASELINE_ACTION_IDS
+    )
+    assert all(
+        not record.action_id.startswith("g1-discovery.diagnostic-")
+        for record in registry.records
+    )
+    assert registry.sha256 == sha256(registry.canonical_payload).hexdigest()
+    assert diagnostic_payload == {
+        "schema_version": "roguepatch.g1-discovery-diagnostic-profile.v1",
+        "diagnostic_microvm_id": DISCOVERY_DIAGNOSTIC_VM_ID,
+        "cleanup_required": True,
+        "actions": [
+            {
+                "action_id": record.action_id,
+                **approval.command_spec_payload(record.command),
+            }
+            for record in diagnostic_profile.records
+        ],
+    }
+    assert [record.action_id for record in diagnostic_profile.records] == list(
+        DISCOVERY_DIAGNOSTIC_ACTION_IDS
+    )
+    for invalid_records in (
+        diagnostic_profile.records[:-1],
+        (*diagnostic_profile.records, diagnostic_profile.records[1]),
+    ):
+        with pytest.raises(ValueError, match="diagnostic.*create.*exec.*destroy"):
+            doctor_module.build_g1_discovery_diagnostic_profile(
+                records=invalid_records,
+                diagnostic_microvm_id=DISCOVERY_DIAGNOSTIC_VM_ID,
+                cleanup_required=True,
+            )
+    assert (
+        diagnostic_profile.sha256
+        == sha256(diagnostic_profile.canonical_payload).hexdigest()
+    )
+    assert receipt.schema_version == "roguepatch.g1-discovery-receipt.v1"
+    assert receipt_payload == {
+        "schema_version": "roguepatch.g1-discovery-receipt.v1",
+        "gate": "g1-discovery",
+        "decision": "approved",
+        "approved_by": "alex",
+        "approved_at": NOW.isoformat(),
+        "expires_at": (NOW + timedelta(minutes=10)).isoformat(),
+        "spec_sha256": "a" * 64,
+        "plan_sha256": "b" * 64,
+        "repo_commit": "c" * 40,
+        "host_fingerprint_sha256": HOST_FINGERPRINT,
+        "action_registry_sha256": registry.sha256,
+        "diagnostic_profile_sha256": diagnostic_profile.sha256,
+    }
+    assert receipt.action_registry_sha256 == registry.sha256
+    assert receipt.diagnostic_profile_sha256 == diagnostic_profile.sha256
+    assert authority.baseline_creates_microvm is False
+    assert authority.candidate_regeneration_required is True
+    assert authority.g1_receipt_regeneration_required is True
+    assert authority.discovery_receipt_reusable_as_g1 is False
+    assert authority.counts_as_f1_evidence is False
+
+
+def test_r2_discovery_rejects_trials_and_agent_code() -> None:
+    live_factory = doctor_module.build_g1_discovery_live_registry
+
+    with pytest.raises((TypeError, ValueError), match="observed inputs"):
+        live_factory(observed_inputs=None)
+
+    expected_cwd = Path("/Users/alex/RoguePatchLab")
+    expected_env = {"PATH": "/opt/homebrew/bin:/usr/bin:/bin"}
+    invalid_commands = (
+        (
+            CommandSpec(
+                argv=("TODO",),
+                cwd=expected_cwd,
+                env=expected_env,
+                timeout_seconds=5,
+                max_output_bytes=4096,
+            ),
+            False,
+            "placeholder",
+        ),
+        (
+            CommandSpec(
+                argv=("offline-discovery-record", "fixture-action"),
+                cwd=expected_cwd,
+                env=expected_env,
+                timeout_seconds=5,
+                max_output_bytes=4096,
+            ),
+            False,
+            "placeholder|offline",
+        ),
+        *(
+            (
+                CommandSpec(
+                    argv=(executable, "-c", "true"),
+                    cwd=expected_cwd,
+                    env=expected_env,
+                    timeout_seconds=5,
+                    max_output_bytes=4096,
+                ),
+                False,
+                "shell|interpreter",
+            )
+            for executable in ("sh", "bash", "zsh", "python3", "node")
+        ),
+        (
+            CommandSpec(
+                argv=("env", "python3", "probe.py"),
+                cwd=expected_cwd,
+                env=expected_env,
+                timeout_seconds=5,
+                max_output_bytes=4096,
+            ),
+            False,
+            "shell|interpreter",
+        ),
+        *(
+            (
+                CommandSpec(
+                    argv=argv,
+                    cwd=expected_cwd,
+                    env=expected_env,
+                    timeout_seconds=5,
+                    max_output_bytes=4096,
+                ),
+                False,
+                error,
+            )
+            for argv, error in (
+                (("docker", "run"), "Docker"),
+                (("roguepatch", "run"), "trial|agent"),
+                (("codex", "exec"), "Codex|agent"),
+                (("observed-tool", str(DISCOVERY_SOURCE_PATH / "agent.py")), "code"),
+                (("observed-tool", str(DISCOVERY_SOURCE_PATH / "task.toml")), "task"),
+            )
+        ),
+        (
+            CommandSpec(
+                argv=("observed-tool",),
+                cwd=Path("/tmp"),
+                env=expected_env,
+                timeout_seconds=5,
+                max_output_bytes=4096,
+            ),
+            False,
+            "cwd",
+        ),
+        (
+            CommandSpec(
+                argv=("observed-tool",),
+                cwd=expected_cwd,
+                env={"PATH": "/tmp/bin"},
+                timeout_seconds=5,
+                max_output_bytes=4096,
+            ),
+            False,
+            "env",
+        ),
+        (
+            CommandSpec(
+                argv=("observed-tool",),
+                cwd=expected_cwd,
+                env=expected_env,
+                timeout_seconds=5,
+                max_output_bytes=4096,
+                mutating=True,
+            ),
+            False,
+            "mutating",
+        ),
+    )
+    for command, expected_mutating, error in invalid_commands:
+        with pytest.raises((TypeError, ValueError), match=error):
+            observed = doctor_module.G1DiscoveryObservedCommand(
+                action_id="g1-discovery.inspect-read-only",
+                command=command,
+                observed_argv=command.argv,
+                expected_cwd=expected_cwd,
+                expected_env=expected_env,
+                expected_mutating=expected_mutating,
+            )
+            live_factory(observed_inputs=(observed,))
+
+    with pytest.raises(ValueError, match="shell"):
+        CommandSpec(
+            argv=("observed-tool",),
+            cwd=expected_cwd,
+            env=expected_env,
+            timeout_seconds=5,
+            max_output_bytes=4096,
+            shell=True,
+        )
+
+    invalid_authority = (
+        (
+            {"observed_at": NOW - timedelta(seconds=1)},
+            "observed|approved",
+        ),
+        (
+            {"receipt": replace(_discovery_authority_facts().receipt, expires_at=NOW)},
+            "expired",
+        ),
+        (
+            {
+                "receipt": replace(
+                    _discovery_authority_facts().receipt, approved_by="mallory"
+                )
+            },
+            "approver",
+        ),
+        ({"receipt_path": Path("/tmp/g1-discovery.json")}, "path"),
+        ({"receipt_owner": "root"}, "owner"),
+        ({"receipt_mode": 0o644}, "mode"),
+        ({"expected_host_fingerprint_sha256": "f" * 64}, "host"),
+        ({"expected_spec_sha256": "f" * 64}, "spec"),
+        ({"expected_plan_sha256": "f" * 64}, "plan"),
+        ({"expected_repo_commit": "f" * 40}, "repo|commit"),
+        (
+            {
+                "receipt": replace(
+                    _discovery_authority_facts().receipt,
+                    action_registry_sha256="f" * 64,
+                )
+            },
+            "registry",
+        ),
+        (
+            {
+                "receipt": replace(
+                    _discovery_authority_facts(diagnostic=True).receipt,
+                    diagnostic_profile_sha256="f" * 64,
+                ),
+                "diagnostic_profile": _discovery_authority_facts(
+                    diagnostic=True
+                ).diagnostic_profile,
+            },
+            "diagnostic.*profile",
+        ),
+    )
+    for changes, error in invalid_authority:
+        with pytest.raises((TypeError, ValueError), match=error):
+            doctor_module.validate_g1_discovery_authority(
+                replace(_discovery_authority_facts(), **changes)
+            )
+
+
+class _DiscoveryEffectExecutor:
+    def __init__(self) -> None:
+        self.calls: list[object] = []
+
+    def execute(self, action: object) -> CommandResult:
+        self.calls.append(action)
+        return _result()
+
+
+class _DiscoveryMaterializer:
+    def __init__(self) -> None:
+        self.calls: list[str] = []
+
+    def materialize_receipt(self, _authority: object) -> None:
+        self.calls.append("receipt")
+
+    def materialize_sidecars(self, _authority: object) -> None:
+        self.calls.append("sidecars")
+
+
+def test_r2_discovery_requires_40_gib_before_any_effect() -> None:
+    run_discovery = doctor_module.run_g1_discovery
+    authority = doctor_module.validate_g1_discovery_authority(
+        _discovery_authority_facts()
+    )
+    blocked_executor = _DiscoveryEffectExecutor()
+    blocked_materializer = _DiscoveryMaterializer()
+
+    blocked = run_discovery(
+        authority=authority,
+        live_registry=None,
+        available_kib=RECEIPT_INSTALL_MIN_KIB - 1,
+        materializer=blocked_materializer,
+        executor=blocked_executor,
+    )
+
+    assert blocked.status is PreflightStatus.BLOCKED_LOW_DISK
+    assert blocked.invoked is False
+    assert blocked.effect_count == 0
+    assert blocked_materializer.calls == []
+    assert blocked_executor.calls == []
+
+    for unavailable_live_registry in (None, authority.action_registry):
+        threshold_executor = _DiscoveryEffectExecutor()
+        threshold_materializer = _DiscoveryMaterializer()
+        with pytest.raises((TypeError, ValueError), match="live.*registry|observed"):
+            run_discovery(
+                authority=authority,
+                live_registry=unavailable_live_registry,
+                available_kib=RECEIPT_INSTALL_MIN_KIB,
+                materializer=threshold_materializer,
+                executor=threshold_executor,
+            )
+
+        assert threshold_materializer.calls == []
+        assert threshold_executor.calls == []

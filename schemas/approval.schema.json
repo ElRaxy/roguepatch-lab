@@ -13,7 +13,9 @@
     "expires_at",
     "spec_sha256",
     "plan_sha256",
-    "repo_commit"
+    "repo_commit",
+    "host_fingerprint_sha256",
+    "action_registry_sha256"
   ],
   "properties": {
     "schema_version": {
@@ -46,6 +48,14 @@
     "repo_commit": {
       "type": "string",
       "pattern": "^(?:[0-9a-f]{40}|[0-9a-f]{64})$"
+    },
+    "host_fingerprint_sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "action_registry_sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
     }
   },
   "$defs": {

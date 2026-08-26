@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import errno
 import inspect
+import json
 import os
+from hashlib import sha256
 from pathlib import Path, PurePosixPath
 
 import pytest
@@ -16,11 +18,14 @@ pytestmark = pytest.mark.skipif(
 
 
 def test_real_oracle_runs_in_a_distinct_hardened_microvm() -> None:
+    from roguepatch import approval
     from roguepatch.adapters.docker_oracle import (
         PROTECTED_PROBE_ACTION_IDS,
         PROTECTED_PROBE_ORDER,
         PROTECTED_PROBE_PATHS,
+        OracleEngineIdentityObservation,
         ProtectedTarget,
+        SourceMountObservation,
         run_live_oracle_boundary_probe,
         validate_oracle_boundary,
     )
@@ -29,10 +34,9 @@ def test_real_oracle_runs_in_a_distinct_hardened_microvm() -> None:
         F1ExecutionStatus,
         NetworkMode,
         SandboxLifecycleAction,
+        SandboxRole,
         WorkspaceMode,
     )
-
-    from roguepatch import approval
     from roguepatch.approval import G1_ACTION_IDS, ApprovalState, host_identity_sha256
     from roguepatch.doctor import PreflightStatus
 
@@ -50,6 +54,9 @@ def test_real_oracle_runs_in_a_distinct_hardened_microvm() -> None:
         ProtectedTarget.MODEL_CREDENTIALS,
         ProtectedTarget.DOCKER_SOCKET,
         ProtectedTarget.ORACLE_CHECKER,
+        ProtectedTarget.SOURCE_PROTECTED_MANIFEST,
+        ProtectedTarget.SOURCE_GOLDEN_PATCH,
+        ProtectedTarget.SOURCE_ARTIFACTS,
     }
     canonical_targets = (
         ProtectedTarget.HOST_CANARY,
@@ -62,6 +69,9 @@ def test_real_oracle_runs_in_a_distinct_hardened_microvm() -> None:
         ProtectedTarget.MODEL_CREDENTIALS,
         ProtectedTarget.DOCKER_SOCKET,
         ProtectedTarget.ORACLE_CHECKER,
+        ProtectedTarget.SOURCE_PROTECTED_MANIFEST,
+        ProtectedTarget.SOURCE_GOLDEN_PATCH,
+        ProtectedTarget.SOURCE_ARTIFACTS,
     )
     expected_trace_action_ids = (
         "g1.sbx.agent.create",
@@ -69,6 +79,7 @@ def test_real_oracle_runs_in_a_distinct_hardened_microvm() -> None:
         "g1.sbx.agent.freeze",
         "g1.sbx.agent.destroy",
         "g1.sbx.oracle.create",
+        "g1.sbx.oracle.engine-identity",
         "g1.sbx.oracle.checker",
         "g1.sbx.oracle.destroy",
     )
@@ -96,6 +107,15 @@ def test_real_oracle_runs_in_a_distinct_hardened_microvm() -> None:
     assert all(available >= 31_457_280 for available in live.pre_create_available_kib)
     assert all(available >= 20_971_520 for available in live.post_create_available_kib)
     assert PROTECTED_PROBE_ORDER == canonical_targets
+    assert PROTECTED_PROBE_PATHS[
+        ProtectedTarget.SOURCE_PROTECTED_MANIFEST
+    ] == PurePosixPath("/run/sandbox/source/protected/protected_manifest.json")
+    assert PROTECTED_PROBE_PATHS[ProtectedTarget.SOURCE_GOLDEN_PATCH] == PurePosixPath(
+        "/run/sandbox/source/protected/golden.patch"
+    )
+    assert PROTECTED_PROBE_PATHS[ProtectedTarget.SOURCE_ARTIFACTS] == PurePosixPath(
+        "/run/sandbox/source/artifacts"
+    )
     action_registry = {action.action_id: action for action in live.action_registry}
     assert set(action_registry) == set(G1_ACTION_IDS)
     assert set(action_registry) == {
@@ -105,15 +125,18 @@ def test_real_oracle_runs_in_a_distinct_hardened_microvm() -> None:
         "g1.sbx.agent.freeze",
         "g1.sbx.agent.destroy",
         "g1.sbx.oracle.create",
+        "g1.sbx.oracle.engine-identity",
         "g1.sbx.oracle.checker",
         "g1.sbx.oracle.destroy",
     }
+    assert len(action_registry) == 21
     trace = facts.execution_trace
     assert trace.schema_version == "roguepatch.f1-execution-trace.v1"
     assert [record.action_id for record in trace.records] == list(
         expected_trace_action_ids
     )
-    assert [record.sequence for record in trace.records] == list(range(1, 17))
+    assert len(trace.records) == 20
+    assert [record.sequence for record in trace.records] == list(range(1, 21))
     assert trace.records[0].prev_record_sha256 == F1_TRACE_GENESIS_SHA256
     assert all(
         record.prev_record_sha256 == trace.records[index - 1].sha256
@@ -121,12 +144,12 @@ def test_real_oracle_runs_in_a_distinct_hardened_microvm() -> None:
     )
     assert all(record.status is F1ExecutionStatus.SUCCEEDED for record in trace.records)
     assert [record.microvm_role for record in trace.records] == [
-        *([facts.agent.role] * 13),
-        *([facts.oracle.role] * 3),
+        *([SandboxRole.AGENT] * 16),
+        *([SandboxRole.ORACLE] * 4),
     ]
     assert [record.microvm_id for record in trace.records] == [
-        *([facts.agent.microvm_id] * 13),
-        *([facts.oracle.microvm_id] * 3),
+        *([facts.agent.microvm_id] * 16),
+        *([facts.oracle.microvm_id] * 4),
     ]
     for record in trace.records:
         registered = action_registry[record.action_id]
@@ -148,6 +171,7 @@ def test_real_oracle_runs_in_a_distinct_hardened_microvm() -> None:
     records = {record.sha256: record for record in facts.execution_records}
     assert set(specs) == set(observations) == required_targets
     assert len(facts.probe_specs) == len(facts.probe_observations)
+    assert len(required_targets) == 13
     assert len(facts.execution_records) == len(required_targets)
     for target in required_targets:
         spec = specs[target]
@@ -169,6 +193,79 @@ def test_real_oracle_runs_in_a_distinct_hardened_microvm() -> None:
         assert observation.observed_errno in {errno.ENOENT, errno.EACCES}
         assert record.read_only is True
     assert observations[ProtectedTarget.HOST_CANARY].observed_errno == errno.ENOENT
+    host_canary = observations[ProtectedTarget.HOST_CANARY]
+    source_mount = host_canary.source_mount_observation
+    assert isinstance(source_mount, SourceMountObservation)
+    agent_spec = facts.create_requests[0].agent_spec
+    assert agent_spec is not None
+    agent_source_proof = agent_spec.source_path_proof
+    assert source_mount.sandbox == facts.agent
+    assert source_mount.mount_path == PurePosixPath("/run/sandbox/source")
+    assert source_mount.git_top_level == source_mount.mount_path
+    assert source_mount.source_path_proof_sha256 == agent_source_proof.sha256
+    assert source_mount.git_commit == agent_source_proof.git_commit
+    assert source_mount.git_tree_digest == agent_source_proof.git_tree_digest
+    assert source_mount.read_only is True
+    assert source_mount.execution_record_sha256 == facts.execution_records[0].sha256
+    host_canary_result = {
+        "schema_version": "roguepatch.host-canary-result.v1",
+        "target": host_canary.target.value,
+        "observed_errno": host_canary.observed_errno,
+        "source_mount": {
+            "sandbox": {
+                "role": source_mount.sandbox.role.value,
+                "microvm_id": source_mount.sandbox.microvm_id,
+            },
+            "mount_path": str(source_mount.mount_path),
+            "git_top_level": str(source_mount.git_top_level),
+            "source_path_proof_sha256": source_mount.source_path_proof_sha256,
+            "git_commit": source_mount.git_commit,
+            "git_tree_digest": source_mount.git_tree_digest,
+            "read_only": source_mount.read_only,
+        },
+    }
+    host_canary_result_digest = sha256(
+        json.dumps(
+            host_canary_result,
+            ensure_ascii=False,
+            separators=(",", ":"),
+            sort_keys=True,
+        ).encode()
+    ).hexdigest()
+    assert host_canary.result_digest == host_canary_result_digest
+    assert facts.execution_records[0].result_digest == host_canary_result_digest
+    assert all(
+        observation.source_mount_observation is None
+        for observation in facts.probe_observations[1:]
+    )
+
+    engine_identity = facts.engine_identity_observation
+    checker = facts.checker_observation
+    assert isinstance(engine_identity, OracleEngineIdentityObservation)
+    assert engine_identity.sandbox == facts.oracle
+    assert engine_identity.action_registry_sha256 == facts.action_registry_sha256
+    assert engine_identity.identity_result.succeeded
+    assert (
+        engine_identity.identity_result.stdout
+        == engine_identity.identity_result.stdout.strip()
+    )
+    assert (
+        engine_identity.engine_identity_sha256
+        == sha256(engine_identity.identity_result.stdout.encode()).hexdigest()
+    )
+    assert not hasattr(facts.create_observations[0], "engine_identity_sha256")
+    assert not hasattr(facts.create_observations[1], "engine_identity_sha256")
+    assert checker.sandbox == facts.oracle
+    assert checker.action_registry_sha256 == facts.action_registry_sha256
+    assert checker.engine_identity_sha256 == engine_identity.engine_identity_sha256
+    assert (
+        next(
+            record
+            for record in trace.records
+            if record.action_id == "g1.sbx.oracle.engine-identity"
+        ).result_digest
+        == engine_identity.sha256
+    )
     assert [record.action for record in facts.lifecycle] == [
         SandboxLifecycleAction.CREATE,
         SandboxLifecycleAction.FREEZE,
