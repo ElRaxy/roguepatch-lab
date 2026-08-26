@@ -70,7 +70,12 @@ from roguepatch.approval import (
     host_identity_sha256,
 )
 from roguepatch.doctor import (
+    CheckFact,
+    CheckState,
+    DaemonIsolationFacts,
     DiskPreflightFacts,
+    DoctorCheck,
+    DoctorReport,
     LivePreflightFacts,
     SandboxResourceFacts,
 )
@@ -264,6 +269,36 @@ def _registered_command_digest(action_id: str) -> str:
     return approval._command_spec_sha256(_registered_action(action_id).command)
 
 
+def _ready_doctor_report() -> DoctorReport:
+    return DoctorReport(
+        facts={
+            check: CheckFact(check=check, state=CheckState.READY)
+            for check in DoctorCheck
+        }
+    )
+
+
+def _daemon_isolation_facts() -> DaemonIsolationFacts:
+    observation_digest = _digest("oracle-engine-identity-observation")
+    registry_digest = _registry_digest()
+    return DaemonIsolationFacts(
+        action_id=ORACLE_ENGINE_IDENTITY_ACTION_ID,
+        sandbox_role=SandboxRole.ORACLE.value,
+        isolation_scope="microvm",
+        oracle_microvm_id=ORACLE.microvm_id,
+        engine_identity_observation_sha256=observation_digest,
+        engine_identity_trace_result_sha256=observation_digest,
+        engine_identity_sha256=ORACLE_ENGINE_IDENTITY_SHA256,
+        checker_engine_identity_sha256=ORACLE_ENGINE_IDENTITY_SHA256,
+        action_registry_sha256=registry_digest,
+        engine_identity_action_registry_sha256=registry_digest,
+        private_engine_observed=True,
+        docker_desktop_observed=False,
+        host_daemon_accessible=False,
+        shared_socket_observed=False,
+    )
+
+
 def _live_gate(*, available_kib: int = RECEIPT_INSTALL_MIN_KIB) -> LiveOracleGateFacts:
     binding = ApprovalBinding(
         gate="g1",
@@ -282,6 +317,8 @@ def _live_gate(*, available_kib: int = RECEIPT_INSTALL_MIN_KIB) -> LiveOracleGat
         approval_state=ApprovalState.APPROVED,
         receipt_binding=receipt_binding,
         action_registry_sha256=_registry_digest(),
+        doctor_report=_ready_doctor_report(),
+        daemon_isolation_facts=_daemon_isolation_facts(),
         preflight=LivePreflightFacts(
             disk=DiskPreflightFacts(
                 available_kib=available_kib,
@@ -1149,6 +1186,104 @@ def _gate_with_defect(defect: str) -> LiveOracleGateFacts:
         return replace(gate, host_fingerprint_sha256=OTHER_DIGEST)
     if defect == "registry-misbound":
         return replace(gate, action_registry_sha256=OTHER_DIGEST)
+    if defect in {"doctor-daemon-not-ready", "doctor-isolation-not-ready"}:
+        check = (
+            DoctorCheck.DAEMON
+            if defect == "doctor-daemon-not-ready"
+            else DoctorCheck.ISOLATION
+        )
+        facts = dict(gate.doctor_report.facts)
+        facts[check] = CheckFact(check=check, state=CheckState.MISSING)
+        return replace(gate, doctor_report=DoctorReport(facts=facts))
+    if defect == "engine-action-id":
+        return replace(
+            gate,
+            daemon_isolation_facts=replace(
+                gate.daemon_isolation_facts,
+                action_id=ORACLE_CHECKER_ACTION_ID,
+            ),
+        )
+    if defect == "engine-sandbox-role":
+        return replace(
+            gate,
+            daemon_isolation_facts=replace(
+                gate.daemon_isolation_facts,
+                sandbox_role=SandboxRole.AGENT.value,
+            ),
+        )
+    if defect == "engine-isolation-scope":
+        return replace(
+            gate,
+            daemon_isolation_facts=replace(
+                gate.daemon_isolation_facts,
+                isolation_scope="host",
+            ),
+        )
+    if defect in {"oracle-microvm-empty", "oracle-microvm-whitespace"}:
+        return replace(
+            gate,
+            daemon_isolation_facts=replace(
+                gate.daemon_isolation_facts,
+                oracle_microvm_id=("" if defect == "oracle-microvm-empty" else "   "),
+            ),
+        )
+    if defect == "engine-observation-trace-mismatch":
+        return replace(
+            gate,
+            daemon_isolation_facts=replace(
+                gate.daemon_isolation_facts,
+                engine_identity_trace_result_sha256=OTHER_DIGEST,
+            ),
+        )
+    if defect == "engine-checker-mismatch":
+        return replace(
+            gate,
+            daemon_isolation_facts=replace(
+                gate.daemon_isolation_facts,
+                checker_engine_identity_sha256=OTHER_DIGEST,
+            ),
+        )
+    if defect == "engine-not-private":
+        return replace(
+            gate,
+            daemon_isolation_facts=replace(
+                gate.daemon_isolation_facts,
+                private_engine_observed=False,
+            ),
+        )
+    if defect == "engine-registry-internally-consistent-but-misbound":
+        return replace(
+            gate,
+            daemon_isolation_facts=replace(
+                gate.daemon_isolation_facts,
+                action_registry_sha256=OTHER_DIGEST,
+                engine_identity_action_registry_sha256=OTHER_DIGEST,
+            ),
+        )
+    if defect == "host-daemon-accessible":
+        return replace(
+            gate,
+            daemon_isolation_facts=replace(
+                gate.daemon_isolation_facts,
+                host_daemon_accessible=True,
+            ),
+        )
+    if defect == "docker-desktop":
+        return replace(
+            gate,
+            daemon_isolation_facts=replace(
+                gate.daemon_isolation_facts,
+                docker_desktop_observed=True,
+            ),
+        )
+    if defect == "shared-socket":
+        return replace(
+            gate,
+            daemon_isolation_facts=replace(
+                gate.daemon_isolation_facts,
+                shared_socket_observed=True,
+            ),
+        )
     if defect == "initial-below-40-gib":
         return _live_gate(available_kib=RECEIPT_INSTALL_MIN_KIB - 1)
     raise AssertionError(f"unknown gate defect: {defect}")
@@ -1156,10 +1291,14 @@ def _gate_with_defect(defect: str) -> LiveOracleGateFacts:
 
 def test_f1_orchestrator_requires_gate_and_disk_authority() -> None:
     parameters = inspect.signature(run_f1_oracle_sequence).parameters
+    gate_parameters = inspect.signature(LiveOracleGateFacts).parameters
 
     assert parameters["gate"].default is inspect.Parameter.empty
     assert parameters["disk_safety"].default is inspect.Parameter.empty
     assert parameters["executor"].default is inspect.Parameter.empty
+    assert {"doctor_report", "daemon_isolation_facts"} <= set(gate_parameters)
+    assert gate_parameters["doctor_report"].default is inspect.Parameter.empty
+    assert gate_parameters["daemon_isolation_facts"].default is inspect.Parameter.empty
 
 
 @pytest.mark.parametrize(
@@ -1170,6 +1309,20 @@ def test_f1_orchestrator_requires_gate_and_disk_authority() -> None:
         "receipt-misbound",
         "fingerprint-misbound",
         "registry-misbound",
+        "doctor-daemon-not-ready",
+        "doctor-isolation-not-ready",
+        "engine-action-id",
+        "engine-sandbox-role",
+        "engine-isolation-scope",
+        "oracle-microvm-empty",
+        "oracle-microvm-whitespace",
+        "engine-observation-trace-mismatch",
+        "engine-checker-mismatch",
+        "engine-not-private",
+        "engine-registry-internally-consistent-but-misbound",
+        "host-daemon-accessible",
+        "docker-desktop",
+        "shared-socket",
         "initial-below-40-gib",
     ],
 )
@@ -2612,13 +2765,11 @@ def test_r6_engine_identity_observation_mutants_fail_closed_and_cleanup(
     expected_actions = [
         *AGENT_TRACE_ACTION_IDS,
         ORACLE_CREATE_ACTION_ID,
+        ORACLE_ENGINE_IDENTITY_ACTION_ID,
         ORACLE_DESTROY_ACTION_ID,
     ]
-    if defect != "result-identity-mismatch":
-        expected_actions.insert(-1, ORACLE_ENGINE_IDENTITY_ACTION_ID)
     assert _action_ids(executor) == expected_actions
-    if defect != "result-identity-mismatch":
-        assert executor.trace_records[-2].action_id == ORACLE_ENGINE_IDENTITY_ACTION_ID
+    assert executor.trace_records[-2].action_id == ORACLE_ENGINE_IDENTITY_ACTION_ID
     assert executor.trace_records[-1].action_id == ORACLE_DESTROY_ACTION_ID
     assert executor.trace_records[-1].status is F1ExecutionStatus.SUCCEEDED
     _assert_destroy_matches_create_observation(executor, SandboxRole.AGENT)

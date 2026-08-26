@@ -1,18 +1,21 @@
 from __future__ import annotations
 
 import inspect
+from dataclasses import replace
 from hashlib import sha256
 from pathlib import Path
 
+import pytest
+
+from roguepatch import approval
+from roguepatch.adapters import docker_oracle
 from roguepatch.adapters.docker_oracle import (
+    LiveOracleGateError,
     LiveOracleGateFacts,
     run_f1_oracle_sequence,
     validate_live_oracle_gate,
 )
 from roguepatch.adapters.sbx_backend import SBX_EXECUTABLE_ALLOWLIST, SbxBackend
-
-from roguepatch import approval
-from roguepatch.adapters import docker_oracle
 from roguepatch.approval import (
     G1_ACTION_IDS,
     ApprovalBinding,
@@ -23,7 +26,12 @@ from roguepatch.approval import (
     host_identity_sha256,
 )
 from roguepatch.doctor import (
+    CheckFact,
+    CheckState,
+    DaemonIsolationFacts,
     DiskPreflightFacts,
+    DoctorCheck,
+    DoctorReport,
     LivePreflightFacts,
     SandboxResourceFacts,
 )
@@ -64,6 +72,36 @@ def _command_factory(action_id: str) -> CommandSpec:
 
 G1_ACTION_REGISTRY = build_g1_action_registry(command_factory=_command_factory)
 ACTION_REGISTRY_DIGEST = approval._action_registry_sha256(G1_ACTION_REGISTRY)
+ENGINE_IDENTITY_DIGEST = sha256(b"synthetic-private-oracle-engine").hexdigest()
+ENGINE_OBSERVATION_DIGEST = sha256(b"synthetic-engine-observation").hexdigest()
+
+
+def _ready_doctor_report() -> DoctorReport:
+    return DoctorReport(
+        facts={
+            check: CheckFact(check=check, state=CheckState.READY)
+            for check in DoctorCheck
+        }
+    )
+
+
+def _daemon_isolation_facts() -> DaemonIsolationFacts:
+    return DaemonIsolationFacts(
+        action_id="g1.sbx.oracle.engine-identity",
+        sandbox_role="oracle",
+        isolation_scope="microvm",
+        oracle_microvm_id="synthetic-oracle-microvm",
+        engine_identity_observation_sha256=ENGINE_OBSERVATION_DIGEST,
+        engine_identity_trace_result_sha256=ENGINE_OBSERVATION_DIGEST,
+        engine_identity_sha256=ENGINE_IDENTITY_DIGEST,
+        checker_engine_identity_sha256=ENGINE_IDENTITY_DIGEST,
+        action_registry_sha256=ACTION_REGISTRY_DIGEST,
+        engine_identity_action_registry_sha256=ACTION_REGISTRY_DIGEST,
+        private_engine_observed=True,
+        docker_desktop_observed=False,
+        host_daemon_accessible=False,
+        shared_socket_observed=False,
+    )
 
 
 def _live_gate(*, available_kib: int = RECEIPT_INSTALL_MIN_KIB) -> LiveOracleGateFacts:
@@ -100,6 +138,8 @@ def _live_gate(*, available_kib: int = RECEIPT_INSTALL_MIN_KIB) -> LiveOracleGat
         receipt_binding=receipt_binding,
         action_registry_sha256=ACTION_REGISTRY_DIGEST,
         preflight=preflight,
+        doctor_report=_ready_doctor_report(),
+        daemon_isolation_facts=_daemon_isolation_facts(),
     )
 
 
@@ -109,9 +149,76 @@ def test_live_gate_is_an_inert_validator_bound_to_the_closed_registry() -> None:
     assert tuple(inspect.signature(validate_live_oracle_gate).parameters) == ("gate",)
     assert validate_live_oracle_gate(gate=gate) is None
     assert {action.action_id for action in G1_ACTION_REGISTRY} == set(G1_ACTION_IDS)
-    assert len(G1_ACTION_REGISTRY) == 17
+    assert len(G1_ACTION_REGISTRY) == 21
     assert gate.receipt_binding.action_registry_sha256 == ACTION_REGISTRY_DIGEST
+    assert gate.daemon_isolation_facts.action_registry_sha256 == ACTION_REGISTRY_DIGEST
+    assert gate.daemon_isolation_facts.engine_identity_sha256 == ENGINE_IDENTITY_DIGEST
+    assert gate.doctor_report.ready is True
     assert gate.preflight.create_invocations == 0
+
+
+@pytest.mark.parametrize(
+    ("field", "unsafe_value"),
+    (
+        ("docker_desktop_observed", True),
+        ("host_daemon_accessible", True),
+        ("shared_socket_observed", True),
+        ("private_engine_observed", False),
+        ("engine_identity_trace_result_sha256", "e" * 64),
+        ("checker_engine_identity_sha256", "e" * 64),
+        ("engine_identity_action_registry_sha256", "f" * 64),
+    ),
+)
+def test_live_gate_rejects_unsafe_or_misbound_r1_daemon_facts(
+    field: str,
+    unsafe_value: object,
+) -> None:
+    safe_gate = _live_gate()
+    unsafe_facts = replace(
+        safe_gate.daemon_isolation_facts,
+        **{field: unsafe_value},
+    )
+
+    with pytest.raises(
+        LiveOracleGateError, match="daemon|engine|Docker|socket|registry"
+    ):
+        validate_live_oracle_gate(
+            gate=replace(safe_gate, daemon_isolation_facts=unsafe_facts)
+        )
+
+
+def test_live_gate_rejects_a_not_ready_doctor_report_without_effects() -> None:
+    safe_gate = _live_gate()
+    not_ready_report = DoctorReport(
+        facts={
+            check: CheckFact(
+                check=check,
+                state=(
+                    CheckState.MISSING
+                    if check is DoctorCheck.DAEMON
+                    else CheckState.READY
+                ),
+                diagnostic="daemon missing" if check is DoctorCheck.DAEMON else "",
+            )
+            for check in DoctorCheck
+        }
+    )
+
+    assert tuple(inspect.signature(validate_live_oracle_gate).parameters) == ("gate",)
+    with pytest.raises(LiveOracleGateError, match="doctor|daemon|ready"):
+        validate_live_oracle_gate(
+            gate=replace(safe_gate, doctor_report=not_ready_report)
+        )
+
+
+def test_live_gate_r1_facts_have_no_default_or_bypass() -> None:
+    gate_parameters = inspect.signature(LiveOracleGateFacts).parameters
+
+    assert gate_parameters["doctor_report"].default is inspect.Parameter.empty
+    assert gate_parameters["daemon_isolation_facts"].default is inspect.Parameter.empty
+    assert "daemon_facts_optional" not in gate_parameters
+    assert "allow_host_daemon" not in gate_parameters
+    assert "allow_docker_desktop" not in gate_parameters
 
 
 def test_f1_exposes_no_second_mutating_gate_or_untraced_backend_path() -> None:
@@ -143,6 +250,6 @@ def test_sbx_is_the_exact_and_only_runtime_executable() -> None:
     )
 
     assert SBX_EXECUTABLE_ALLOWLIST == frozenset({"sbx"})
-    assert len(runtime_actions) == 16
+    assert len(runtime_actions) == 20
     assert all(action.command.argv[0] == "sbx" for action in runtime_actions)
     assert all(action.command.shell is False for action in runtime_actions)
