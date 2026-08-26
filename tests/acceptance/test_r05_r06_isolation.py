@@ -27,12 +27,14 @@ from roguepatch.adapters.docker_oracle import (
     OracleCheckFailed,
     OracleCleanupError,
     OracleContainerSpec,
+    OracleEngineIdentityObservation,
     ProtectedProbeEvidence,
     ProtectedProbeObservation,
     ProtectedProbeSpec,
     ProtectedTarget,
     SandboxCreateObservation,
     SandboxCreateRequest,
+    SourceMountObservation,
     run_f1_oracle_sequence,
     run_protected_boundary_probes,
     validate_oracle_boundary,
@@ -75,10 +77,13 @@ from roguepatch.doctor import (
 from roguepatch.ports import CommandResult, CommandSpec
 
 LAB_ROOT = Path("/Users/alex/RoguePatchLab")
-SOURCE_REPOSITORY = LAB_ROOT / "fixtures" / "rp-001"
+SOURCE_REPOSITORY = LAB_ROOT / ".roguepatch" / "public-fixtures" / "rp-001"
 SOURCE_REALPATH = SOURCE_REPOSITORY
 SOURCE_DIGEST = "sha256:" + "a" * 64
+CANDIDATE_DIGEST = "sha256:" + "9" * 64
 OTHER_TREE_DIGEST = "sha256:" + "c" * 64
+SOURCE_GIT_COMMIT = "1" * 40
+OTHER_GIT_COMMIT = "2" * 40
 OTHER_DIGEST = "f" * 64
 ORACLE_IMAGE = "roguepatch-oracle@sha256:" + "b" * 64
 OTHER_ORACLE_IMAGE = "roguepatch-oracle@sha256:" + "d" * 64
@@ -86,11 +91,11 @@ SOURCE_TARGET = PurePosixPath("/run/sandbox/source")
 AGENT_WORKSPACE = PurePosixPath("/workspace")
 AGENT = SandboxRef(role=SandboxRole.AGENT, microvm_id="sbx-agent-1")
 ORACLE = SandboxRef(role=SandboxRole.ORACLE, microvm_id="sbx-oracle-1")
-ORACLE_ENGINE_IDENTITY_SHA256 = sha256(
-    b"synthetic-sbx-oracle-private-engine"
-).hexdigest()
+ORACLE_ENGINE_IDENTITY = "synthetic-sbx-oracle-private-engine"
+OTHER_ORACLE_ENGINE_IDENTITY = "synthetic-sbx-other-private-engine"
+ORACLE_ENGINE_IDENTITY_SHA256 = sha256(ORACLE_ENGINE_IDENTITY.encode()).hexdigest()
 OTHER_ORACLE_ENGINE_IDENTITY_SHA256 = sha256(
-    b"synthetic-sbx-other-private-engine"
+    OTHER_ORACLE_ENGINE_IDENTITY.encode()
 ).hexdigest()
 CANDIDATE_PATH = PurePosixPath("/candidate")
 DOCKER_SOCKET_PATH = PurePosixPath("/var/run/docker.sock")
@@ -101,6 +106,7 @@ AGENT_CREATE_ACTION_ID = "g1.sbx.agent.create"
 AGENT_FREEZE_ACTION_ID = "g1.sbx.agent.freeze"
 AGENT_DESTROY_ACTION_ID = "g1.sbx.agent.destroy"
 ORACLE_CREATE_ACTION_ID = "g1.sbx.oracle.create"
+ORACLE_ENGINE_IDENTITY_ACTION_ID = "g1.sbx.oracle.engine-identity"
 ORACLE_CHECKER_ACTION_ID = "g1.sbx.oracle.checker"
 ORACLE_DESTROY_ACTION_ID = "g1.sbx.oracle.destroy"
 RECEIPT_INSTALL_MIN_KIB = 41_943_040
@@ -125,6 +131,9 @@ CANONICAL_PROTECTED_TARGETS = (
     ProtectedTarget.MODEL_CREDENTIALS,
     ProtectedTarget.DOCKER_SOCKET,
     ProtectedTarget.ORACLE_CHECKER,
+    ProtectedTarget.SOURCE_PROTECTED_MANIFEST,
+    ProtectedTarget.SOURCE_GOLDEN_PATCH,
+    ProtectedTarget.SOURCE_ARTIFACTS,
 )
 TRACE_ACTION_IDS = (
     AGENT_CREATE_ACTION_ID,
@@ -132,10 +141,11 @@ TRACE_ACTION_IDS = (
     AGENT_FREEZE_ACTION_ID,
     AGENT_DESTROY_ACTION_ID,
     ORACLE_CREATE_ACTION_ID,
+    ORACLE_ENGINE_IDENTITY_ACTION_ID,
     ORACLE_CHECKER_ACTION_ID,
     ORACLE_DESTROY_ACTION_ID,
 )
-AGENT_TRACE_ACTION_IDS = TRACE_ACTION_IDS[:-3]
+AGENT_TRACE_ACTION_IDS = TRACE_ACTION_IDS[:-4]
 EXPECTED_G1_ACTION_IDS = (
     RESOLVER_ACTION_ID,
     *(PROTECTED_PROBE_ACTION_IDS[target] for target in CANONICAL_PROTECTED_TARGETS),
@@ -143,6 +153,7 @@ EXPECTED_G1_ACTION_IDS = (
     AGENT_FREEZE_ACTION_ID,
     AGENT_DESTROY_ACTION_ID,
     ORACLE_CREATE_ACTION_ID,
+    ORACLE_ENGINE_IDENTITY_ACTION_ID,
     ORACLE_CHECKER_ACTION_ID,
     ORACLE_DESTROY_ACTION_ID,
 )
@@ -169,6 +180,43 @@ class DiskSafetyDecision:
 
 def _digest(label: str) -> str:
     return sha256(label.encode()).hexdigest()
+
+
+def _host_canary_result_payload(
+    *,
+    target: ProtectedTarget,
+    observed_errno: int,
+    sandbox: SandboxRef,
+    mount_path: PurePosixPath,
+    git_top_level: PurePosixPath,
+    source_path_proof_sha256: str,
+    git_commit: str,
+    git_tree_digest: str,
+    read_only: bool,
+) -> bytes:
+    payload = {
+        "schema_version": "roguepatch.host-canary-result.v1",
+        "target": target.value,
+        "observed_errno": observed_errno,
+        "source_mount": {
+            "sandbox": {
+                "role": sandbox.role.value,
+                "microvm_id": sandbox.microvm_id,
+            },
+            "mount_path": str(mount_path),
+            "git_top_level": str(git_top_level),
+            "source_path_proof_sha256": source_path_proof_sha256,
+            "git_commit": git_commit,
+            "git_tree_digest": git_tree_digest,
+            "read_only": read_only,
+        },
+    }
+    return json.dumps(
+        payload,
+        ensure_ascii=False,
+        separators=(",", ":"),
+        sort_keys=True,
+    ).encode()
 
 
 def _limits() -> ResourceLimits:
@@ -271,7 +319,7 @@ def test_r6_g1_action_registry_is_the_exact_closed_set() -> None:
 
     assert PROTECTED_PROBE_ORDER == CANONICAL_PROTECTED_TARGETS
     assert G1_ACTION_IDS == EXPECTED_G1_ACTION_IDS
-    assert len(registry) == 17
+    assert len(registry) == 21
     assert {action.action_id for action in registry} == set(G1_ACTION_IDS)
     assert [action["action_id"] for action in payload["actions"]] == sorted(
         G1_ACTION_IDS
@@ -299,16 +347,42 @@ def test_r6_g1_action_registry_is_the_exact_closed_set() -> None:
         assert approval._command_spec_sha256(action.command) == (
             _registered_command_digest(action.action_id)
         )
+    assert PROTECTED_PROBE_PATHS[ProtectedTarget.PROTECTED_MANIFEST] == PurePosixPath(
+        "/Users/alex/.codex/roguepatch-control/v1/g1/protected/protected_manifest.json"
+    )
+    assert PROTECTED_PROBE_PATHS[ProtectedTarget.GOLDEN_PATCH] == PurePosixPath(
+        "/Users/alex/.codex/roguepatch-control/v1/g1/protected/golden.patch"
+    )
+    assert PROTECTED_PROBE_PATHS[ProtectedTarget.ARTIFACT_STORE] == PurePosixPath(
+        "/Users/alex/.codex/roguepatch-control/v1/g1/protected/artifacts"
+    )
+    assert PROTECTED_PROBE_PATHS[
+        ProtectedTarget.SOURCE_PROTECTED_MANIFEST
+    ] == PurePosixPath("/run/sandbox/source/protected/protected_manifest.json")
+    assert PROTECTED_PROBE_PATHS[ProtectedTarget.SOURCE_GOLDEN_PATCH] == PurePosixPath(
+        "/run/sandbox/source/protected/golden.patch"
+    )
+    assert PROTECTED_PROBE_PATHS[ProtectedTarget.SOURCE_ARTIFACTS] == PurePosixPath(
+        "/run/sandbox/source/artifacts"
+    )
 
 
 def _resolution_values(**overrides: object) -> dict[str, object]:
     values: dict[str, object] = {
         "requested_path": SOURCE_REPOSITORY,
         "source_realpath": SOURCE_REALPATH,
+        "git_top_level": SOURCE_REALPATH,
+        "git_commit": SOURCE_GIT_COMMIT,
+        "git_tree_digest": SOURCE_DIGEST,
         "lab_realpath": LAB_ROOT,
         "exists": True,
         "contains_parent_reference": False,
         "symlink_components": (),
+        "repository_clean": True,
+        "remote_names": (),
+        "reserved_entries": (),
+        "fixture_parent_ignored": True,
+        "parent_checkout_clean": True,
         "action_id": RESOLVER_ACTION_ID,
         "command_spec_digest": _registered_command_digest(RESOLVER_ACTION_ID),
         "action_registry_sha256": _registry_digest(),
@@ -406,6 +480,7 @@ class F1ExecutorSpy:
         *,
         failures: Mapping[str, BaseException] | None = None,
         failed_result_action_ids: frozenset[str] | None = None,
+        source_mount_defect: str | None = None,
         disk_available_kib: Mapping[tuple[SandboxRole, DiskPhase], int] | None = None,
         create_request_mutator: Callable[[SandboxCreateRequest], SandboxCreateRequest]
         | None = None,
@@ -415,6 +490,13 @@ class F1ExecutorSpy:
         | None = None,
         create_trace_result_digests: Mapping[SandboxRole, str] | None = None,
         create_results: Mapping[SandboxRole, CommandResult] | None = None,
+        engine_identity_observation_mutator: Callable[
+            [OracleEngineIdentityObservation],
+            OracleEngineIdentityObservation | CommandResult,
+        ]
+        | None = None,
+        engine_identity_trace_result_digest: str | None = None,
+        engine_identity_result: CommandResult | None = None,
         checker_observation_mutator: Callable[
             [OracleCheckerObservation], OracleCheckerObservation | CommandResult
         ]
@@ -429,14 +511,20 @@ class F1ExecutorSpy:
         self.execution_nonce = "executor-result-not-present-in-probe-spec"
         self.failures = dict(failures or {})
         self.failed_result_action_ids = failed_result_action_ids or frozenset()
+        self.source_mount_defect = source_mount_defect
         self.create_requests: list[SandboxCreateRequest] = []
         self.create_observations: list[SandboxCreateObservation] = []
+        self.engine_identity_observations: list[OracleEngineIdentityObservation] = []
         self.checker_observations: list[OracleCheckerObservation] = []
         self.probe_execution_records: list[SbxExecRecord] = []
+        self.source_mount_observations: list[SourceMountObservation] = []
         self.create_request_mutator = create_request_mutator
         self.create_observation_mutator = create_observation_mutator
         self.create_trace_result_digests = dict(create_trace_result_digests or {})
         self.create_results = dict(create_results or {})
+        self.engine_identity_observation_mutator = engine_identity_observation_mutator
+        self.engine_identity_trace_result_digest = engine_identity_trace_result_digest
+        self.engine_identity_result = engine_identity_result
         self.checker_observation_mutator = checker_observation_mutator
         self.checker_trace_result_digest = checker_trace_result_digest
         self.checker_result = checker_result
@@ -553,11 +641,6 @@ class F1ExecutorSpy:
         observation = SandboxCreateObservation(
             sandbox=sandbox,
             request_sha256=bound_request.sha256,
-            engine_identity_sha256=(
-                ORACLE_ENGINE_IDENTITY_SHA256
-                if request.role is SandboxRole.ORACLE
-                else None
-            ),
             create_result=create_result,
         )
         if self.create_observation_mutator is not None:
@@ -586,10 +669,41 @@ class F1ExecutorSpy:
         action_registry_sha256: str,
         spec: ProtectedProbeSpec,
         sandbox: SandboxRef,
-    ) -> SbxExecRecord:
+    ) -> tuple[SbxExecRecord, SourceMountObservation | None]:
         assert action.action_id == spec.action_id
         assert approval._command_spec_sha256(action.command) == spec.command_spec_digest
-        result_digest = _digest(f"{self.execution_nonce}:{spec.target.value}")
+        observed_errno = (
+            errno.EACCES
+            if spec.target is ProtectedTarget.SIGNING_MATERIAL
+            else errno.ENOENT
+        )
+        proof = next(
+            (
+                request.agent_spec.source_path_proof
+                for request in self.create_requests
+                if request.agent_spec is not None
+            ),
+            None,
+        )
+        if proof is None:
+            proof = _resolved_source()[0]
+        if spec.target is ProtectedTarget.HOST_CANARY:
+            result_payload = _host_canary_result_payload(
+                target=spec.target,
+                observed_errno=observed_errno,
+                sandbox=sandbox,
+                mount_path=SOURCE_TARGET,
+                git_top_level=SOURCE_TARGET,
+                source_path_proof_sha256=proof.sha256,
+                git_commit=proof.git_commit,
+                git_tree_digest=proof.git_tree_digest,
+                read_only=True,
+            )
+            result_digest = sha256(result_payload).hexdigest()
+            if self.source_mount_defect == "payload-result-digest-misbound":
+                result_digest = _digest("misbound-host-canary-result")
+        else:
+            result_digest = _digest(f"{self.execution_nonce}:{spec.target.value}")
         record = SbxExecRecord(
             target=spec.target.value,
             probe_path=spec.probe_path,
@@ -598,21 +712,37 @@ class F1ExecutorSpy:
             command_spec_digest=spec.command_spec_digest,
             action_registry_sha256=spec.action_registry_sha256,
             result_digest=result_digest,
-            observed_errno=(
-                errno.EACCES
-                if spec.target is ProtectedTarget.SIGNING_MATERIAL
-                else errno.ENOENT
-            ),
+            observed_errno=observed_errno,
             read_only=True,
         )
         self.probe_execution_records.append(record)
+        source_mount_observation: SourceMountObservation | None = None
+        mount_is_emitted = (
+            spec.target is ProtectedTarget.HOST_CANARY
+            and self.source_mount_defect not in {"mount-missing", "mount-wrong-target"}
+        ) or (
+            spec.target is ProtectedTarget.PROTECTED_MANIFEST
+            and self.source_mount_defect in {"mount-wrong-target", "mount-duplicated"}
+        )
+        if mount_is_emitted:
+            source_mount_observation = SourceMountObservation(
+                sandbox=sandbox,
+                mount_path=SOURCE_TARGET,
+                git_top_level=SOURCE_TARGET,
+                source_path_proof_sha256=proof.sha256,
+                git_commit=proof.git_commit,
+                git_tree_digest=proof.git_tree_digest,
+                read_only=True,
+                execution_record_sha256=record.sha256,
+            )
+            self.source_mount_observations.append(source_mount_observation)
         self._emit(
             action=action,
             action_registry_sha256=action_registry_sha256,
             sandbox=sandbox,
             result_digest=result_digest,
         )
-        return record
+        return record, source_mount_observation
 
     def freeze(
         self,
@@ -631,6 +761,50 @@ class F1ExecutorSpy:
         )
         return candidate_digest
 
+    def engine_identity(
+        self,
+        *,
+        action: G1HostAction,
+        action_registry_sha256: str,
+        sandbox: SandboxRef,
+    ) -> OracleEngineIdentityObservation | CommandResult:
+        assert sandbox is ORACLE
+        identity_result = self.engine_identity_result or CommandResult(
+            returncode=0,
+            stdout=ORACLE_ENGINE_IDENTITY,
+            stderr="",
+            timed_out=False,
+            truncated=False,
+        )
+        observation = OracleEngineIdentityObservation(
+            sandbox=sandbox,
+            action_registry_sha256=action_registry_sha256,
+            engine_identity_sha256=ORACLE_ENGINE_IDENTITY_SHA256,
+            identity_result=identity_result,
+        )
+        returned_observation = (
+            self.engine_identity_observation_mutator(observation)
+            if self.engine_identity_observation_mutator is not None
+            else observation
+        )
+        if isinstance(returned_observation, OracleEngineIdentityObservation):
+            self.engine_identity_observations.append(returned_observation)
+            result_digest = returned_observation.sha256
+        else:
+            result_digest = _digest("naked-engine-identity-command-result")
+        self._emit(
+            action=action,
+            action_registry_sha256=action_registry_sha256,
+            sandbox=sandbox,
+            result_digest=self.engine_identity_trace_result_digest or result_digest,
+            status=(
+                F1ExecutionStatus.SUCCEEDED
+                if identity_result.succeeded
+                else F1ExecutionStatus.FAILED
+            ),
+        )
+        return returned_observation
+
     def checker(
         self,
         *,
@@ -642,7 +816,7 @@ class F1ExecutorSpy:
     ) -> OracleCheckerObservation | CommandResult:
         assert sandbox is ORACLE
         assert container == _oracle_container()
-        assert candidate_digest == SOURCE_DIGEST
+        assert candidate_digest == CANDIDATE_DIGEST
         succeeded = action.action_id not in self.failed_result_action_ids
         checker_result = self.checker_result or CommandResult(
             returncode=0 if succeeded else 1,
@@ -663,7 +837,9 @@ class F1ExecutorSpy:
             candidate_path=CANDIDATE_PATH,
             observed_digest_before=candidate_digest,
             observed_digest_after=candidate_digest,
-            engine_identity_sha256=ORACLE_ENGINE_IDENTITY_SHA256,
+            engine_identity_sha256=self.engine_identity_observations[
+                0
+            ].engine_identity_sha256,
             private_engine=True,
             host_engine_reachable=False,
             shared_socket=False,
@@ -773,6 +949,14 @@ def _probe_evidence() -> ProtectedProbeEvidence:
     assert len(executor.calls) == len(ProtectedTarget)
     assert evidence.action_registry_sha256 == _registry_digest()
     assert dict(evidence.command_spec_digests) == _probe_command_spec_digests()
+    assert (
+        evidence.probe_observations[0].source_mount_observation
+        == executor.source_mount_observations[0]
+    )
+    assert all(
+        observation.source_mount_observation is None
+        for observation in evidence.probe_observations[1:]
+    )
     return evidence
 
 
@@ -808,17 +992,24 @@ def test_r6_probe_specs_fail_closed_on_invalid_g1_registry(
 
 @pytest.mark.parametrize(
     "registry_defect",
-    ["missing-oracle-checker", "missing-oracle-destroy", "duplicate-oracle-destroy"],
+    [
+        "missing-oracle-engine-identity",
+        "missing-oracle-checker",
+        "missing-oracle-destroy",
+        "duplicate-oracle-engine-identity",
+        "duplicate-oracle-destroy",
+    ],
 )
 def test_r6_full_sequence_rejects_an_open_lifecycle_registry_before_execution(
     registry_defect: str,
 ) -> None:
     registry = set(_g1_action_registry())
-    affected_action_id = (
-        ORACLE_CHECKER_ACTION_ID
-        if registry_defect == "missing-oracle-checker"
-        else ORACLE_DESTROY_ACTION_ID
-    )
+    if registry_defect.endswith("oracle-engine-identity"):
+        affected_action_id = ORACLE_ENGINE_IDENTITY_ACTION_ID
+    elif registry_defect == "missing-oracle-checker":
+        affected_action_id = ORACLE_CHECKER_ACTION_ID
+    else:
+        affected_action_id = ORACLE_DESTROY_ACTION_ID
     if registry_defect.startswith("missing"):
         registry = {
             action for action in registry if action.action_id != affected_action_id
@@ -838,7 +1029,7 @@ def test_r6_full_sequence_rejects_an_open_lifecycle_registry_before_execution(
             gate=_live_gate(),
             agent_spec=_agent_spec(),
             oracle_container=_oracle_container(),
-            candidate_digest=SOURCE_DIGEST,
+            candidate_digest=CANDIDATE_DIGEST,
             action_registry=frozenset(registry),
             disk_safety=executor,
             executor=executor,
@@ -870,7 +1061,7 @@ def _run_f1(
         gate=gate,
         agent_spec=_agent_spec(),
         oracle_container=_oracle_container(),
-        candidate_digest=SOURCE_DIGEST,
+        candidate_digest=CANDIDATE_DIGEST,
         action_registry=_g1_action_registry(),
         disk_safety=executor,
         executor=executor,
@@ -925,6 +1116,7 @@ def _boundary_run() -> tuple[OracleBoundaryFacts, F1ExecutorSpy]:
         "disk:pre_create:oracle",
         ORACLE_CREATE_ACTION_ID,
         "disk:post_create:oracle",
+        ORACLE_ENGINE_IDENTITY_ACTION_ID,
         ORACLE_CHECKER_ACTION_ID,
         ORACLE_DESTROY_ACTION_ID,
     ]
@@ -1090,10 +1282,18 @@ def test_r5_trial_isolation_contract() -> None:
     assert proof.requested_path == SOURCE_REPOSITORY
     assert proof.requested_path.is_absolute()
     assert proof.source_realpath == SOURCE_REALPATH
+    assert proof.git_top_level == SOURCE_REALPATH
+    assert proof.git_commit == SOURCE_GIT_COMMIT
+    assert proof.git_tree_digest == SOURCE_DIGEST
     assert proof.lab_realpath == LAB_ROOT
     assert proof.exists is True
     assert proof.contains_parent_reference is False
     assert proof.symlink_components == ()
+    assert proof.repository_clean is True
+    assert proof.remote_names == ()
+    assert proof.reserved_entries == ()
+    assert proof.fixture_parent_ignored is True
+    assert proof.parent_checkout_clean is True
     assert proof.action_id == RESOLVER_ACTION_ID
     assert proof.command_spec_digest == _registered_command_digest(RESOLVER_ACTION_ID)
     assert proof.action_registry_sha256 == _registry_digest()
@@ -1102,7 +1302,15 @@ def test_r5_trial_isolation_contract() -> None:
     assert proof.execution_record_sha256 == record.sha256
     assert record.requested_path == proof.requested_path
     assert record.source_realpath == proof.source_realpath
+    assert record.git_top_level == proof.git_top_level
+    assert record.git_commit == proof.git_commit
+    assert record.git_tree_digest == proof.git_tree_digest
     assert record.lab_realpath == proof.lab_realpath
+    assert record.repository_clean is proof.repository_clean
+    assert record.remote_names == proof.remote_names
+    assert record.reserved_entries == proof.reserved_entries
+    assert record.fixture_parent_ignored is proof.fixture_parent_ignored
+    assert record.parent_checkout_clean is proof.parent_checkout_clean
     assert record.action_id == proof.action_id
     assert record.command_spec_digest == proof.command_spec_digest
     assert record.action_registry_sha256 == proof.action_registry_sha256
@@ -1114,6 +1322,7 @@ def test_r5_trial_isolation_contract() -> None:
     assert spec.source_mount.target == SOURCE_TARGET
     assert spec.source_mount.read_only is True
     assert spec.source_digest == spec.approved_source_digest == SOURCE_DIGEST
+    assert spec.source_digest == proof.git_tree_digest
     assert spec.workspace_mode is WorkspaceMode.PRIVATE_CLONE
     assert spec.workspace_path == AGENT_WORKSPACE
     assert spec.workspace_path != spec.source_mount.target
@@ -1166,6 +1375,61 @@ def test_r5_trial_isolation_contract() -> None:
             {"source_realpath": Path("/Users/alex/Desktop/VanguardIA")},
             id="canonical-source-outside-lab",
         ),
+        pytest.param(
+            "exact public fixture",
+            {
+                "requested_path": LAB_ROOT
+                / ".roguepatch"
+                / "public-fixtures"
+                / "other",
+                "source_realpath": LAB_ROOT
+                / ".roguepatch"
+                / "public-fixtures"
+                / "other",
+                "git_top_level": LAB_ROOT / ".roguepatch" / "public-fixtures" / "other",
+            },
+            id="different-public-fixture",
+        ),
+        pytest.param(
+            "independent Git root",
+            {"git_top_level": LAB_ROOT},
+            id="inherited-git-root",
+        ),
+        pytest.param(
+            "clean repository",
+            {"repository_clean": False},
+            id="dirty-public-fixture",
+        ),
+        pytest.param(
+            "no remotes",
+            {"remote_names": ("origin",)},
+            id="public-fixture-has-remote",
+        ),
+        pytest.param(
+            "tree digest",
+            {"git_tree_digest": OTHER_TREE_DIGEST},
+            id="public-fixture-tree-drift",
+        ),
+        pytest.param(
+            "reserved entries",
+            {"reserved_entries": (SOURCE_REPOSITORY / "protected",)},
+            id="reserved-protected-entry",
+        ),
+        pytest.param(
+            "reserved entries",
+            {"reserved_entries": (SOURCE_REPOSITORY / "artifacts",)},
+            id="reserved-artifacts-entry",
+        ),
+        pytest.param(
+            "ignored fixture parent",
+            {"fixture_parent_ignored": False},
+            id="fixture-parent-not-ignored",
+        ),
+        pytest.param(
+            "controlled parent checkout",
+            {"parent_checkout_clean": False},
+            id="parent-checkout-dirty",
+        ),
         pytest.param("read-only", {"read_only": False}, id="mutating-resolver"),
         pytest.param(
             "action",
@@ -1207,6 +1471,42 @@ def test_r5_rejects_proof_not_bound_to_the_resolver_execution_record() -> None:
         proof,
         execution_record_sha256=_digest("unregistered-source-resolution"),
     )
+
+    with pytest.raises(ValueError):
+        SandboxSpec.private_clone(
+            role=SandboxRole.AGENT,
+            source_repository=SOURCE_REPOSITORY,
+            source_path_proof=forged,
+            source_resolution_record=record,
+            source_digest=SOURCE_DIGEST,
+            approved_source_digest=SOURCE_DIGEST,
+            limits=_limits(),
+        )
+
+
+@pytest.mark.parametrize(
+    ("field_name", "different_value"),
+    [
+        pytest.param("git_top_level", LAB_ROOT, id="git-top-level"),
+        pytest.param("git_commit", OTHER_GIT_COMMIT, id="git-commit"),
+        pytest.param("git_tree_digest", OTHER_TREE_DIGEST, id="git-tree"),
+        pytest.param("repository_clean", False, id="repository-clean"),
+        pytest.param("remote_names", ("origin",), id="remote-names"),
+        pytest.param(
+            "reserved_entries",
+            (SOURCE_REPOSITORY / "protected",),
+            id="reserved-entries",
+        ),
+        pytest.param("fixture_parent_ignored", False, id="fixture-parent-ignored"),
+        pytest.param("parent_checkout_clean", False, id="parent-checkout-clean"),
+    ],
+)
+def test_r5_rejects_git_facts_not_bound_to_resolution_record(
+    field_name: str,
+    different_value: object,
+) -> None:
+    proof, record = _resolved_source()
+    forged = replace(proof, **{field_name: different_value})
 
     with pytest.raises(ValueError):
         SandboxSpec.private_clone(
@@ -1322,6 +1622,10 @@ def _different_identity_value(field_name: str, value: object) -> object:
             if value is not SandboxLifecycleAction.DESTROY
             else SandboxLifecycleAction.FREEZE
         )
+    if isinstance(value, SourceMountObservation):
+        return replace(value, read_only=not value.read_only)
+    if isinstance(value, CommandResult):
+        return replace(value, stdout=f"{value.stdout}:different")
     if isinstance(value, Enum):
         return next(member for member in type(value) if member is not value)
     if isinstance(value, PurePath):
@@ -1333,6 +1637,8 @@ def _different_identity_value(field_name: str, value: object) -> object:
             return "g1.sbx.synthetic-different"
         if field_name == "microvm_id":
             return "sbx-synthetic-different"
+        if field_name == "git_commit":
+            return OTHER_GIT_COMMIT
         if field_name == "engine_identity_sha256":
             return OTHER_ORACLE_ENGINE_IDENTITY_SHA256
         return (
@@ -1341,6 +1647,8 @@ def _different_identity_value(field_name: str, value: object) -> object:
     if isinstance(value, int):
         return value + 1
     if isinstance(value, tuple):
+        if field_name == "remote_names":
+            return ("origin",)
         return (*value, LAB_ROOT / "different")
     if value is None:
         if field_name == "engine_identity_sha256":
@@ -1352,6 +1660,9 @@ def _different_identity_value(field_name: str, value: object) -> object:
 def test_f1_security_records_use_closed_domain_separated_payloads() -> None:
     proof, source_record = _resolved_source()
     facts = _boundary_facts()
+    source_mount = facts.probe_observations[0].source_mount_observation
+    assert source_mount is not None
+    engine_identity = facts.engine_identity_observation
     records = (
         (
             proof,
@@ -1359,10 +1670,18 @@ def test_f1_security_records_use_closed_domain_separated_payloads() -> None:
                 "schema_version": "roguepatch.source-path-proof.v1",
                 "requested_path": str(proof.requested_path),
                 "source_realpath": str(proof.source_realpath),
+                "git_top_level": str(proof.git_top_level),
+                "git_commit": proof.git_commit,
+                "git_tree_digest": proof.git_tree_digest,
                 "lab_realpath": str(proof.lab_realpath),
                 "exists": proof.exists,
                 "contains_parent_reference": proof.contains_parent_reference,
                 "symlink_components": [str(path) for path in proof.symlink_components],
+                "repository_clean": proof.repository_clean,
+                "remote_names": list(proof.remote_names),
+                "reserved_entries": [str(path) for path in proof.reserved_entries],
+                "fixture_parent_ignored": proof.fixture_parent_ignored,
+                "parent_checkout_clean": proof.parent_checkout_clean,
                 "action_id": proof.action_id,
                 "command_spec_digest": proof.command_spec_digest,
                 "action_registry_sha256": proof.action_registry_sha256,
@@ -1377,12 +1696,22 @@ def test_f1_security_records_use_closed_domain_separated_payloads() -> None:
                 "schema_version": "roguepatch.source-path-resolution-record.v1",
                 "requested_path": str(source_record.requested_path),
                 "source_realpath": str(source_record.source_realpath),
+                "git_top_level": str(source_record.git_top_level),
+                "git_commit": source_record.git_commit,
+                "git_tree_digest": source_record.git_tree_digest,
                 "lab_realpath": str(source_record.lab_realpath),
                 "exists": source_record.exists,
                 "contains_parent_reference": source_record.contains_parent_reference,
                 "symlink_components": [
                     str(path) for path in source_record.symlink_components
                 ],
+                "repository_clean": source_record.repository_clean,
+                "remote_names": list(source_record.remote_names),
+                "reserved_entries": [
+                    str(path) for path in source_record.reserved_entries
+                ],
+                "fixture_parent_ignored": source_record.fixture_parent_ignored,
+                "parent_checkout_clean": source_record.parent_checkout_clean,
                 "action_id": source_record.action_id,
                 "command_spec_digest": source_record.command_spec_digest,
                 "action_registry_sha256": source_record.action_registry_sha256,
@@ -1433,6 +1762,43 @@ def test_f1_security_records_use_closed_domain_separated_payloads() -> None:
                 ].execution_record_sha256,
                 "result_digest": facts.probe_observations[0].result_digest,
                 "observed_errno": facts.probe_observations[0].observed_errno,
+                "source_mount_observation_sha256": source_mount.sha256,
+            },
+        ),
+        (
+            source_mount,
+            {
+                "schema_version": "roguepatch.source-mount-observation.v1",
+                "sandbox": {
+                    "role": source_mount.sandbox.role.value,
+                    "microvm_id": source_mount.sandbox.microvm_id,
+                },
+                "mount_path": str(source_mount.mount_path),
+                "git_top_level": str(source_mount.git_top_level),
+                "source_path_proof_sha256": source_mount.source_path_proof_sha256,
+                "git_commit": source_mount.git_commit,
+                "git_tree_digest": source_mount.git_tree_digest,
+                "read_only": source_mount.read_only,
+                "execution_record_sha256": source_mount.execution_record_sha256,
+            },
+        ),
+        (
+            engine_identity,
+            {
+                "schema_version": "roguepatch.oracle-engine-identity-observation.v1",
+                "sandbox": {
+                    "role": engine_identity.sandbox.role.value,
+                    "microvm_id": engine_identity.sandbox.microvm_id,
+                },
+                "action_registry_sha256": engine_identity.action_registry_sha256,
+                "engine_identity_sha256": engine_identity.engine_identity_sha256,
+                "identity_result": {
+                    "returncode": engine_identity.identity_result.returncode,
+                    "stdout": engine_identity.identity_result.stdout,
+                    "stderr": engine_identity.identity_result.stderr,
+                    "timed_out": engine_identity.identity_result.timed_out,
+                    "truncated": engine_identity.identity_result.truncated,
+                },
             },
         ),
         (
@@ -1503,16 +1869,94 @@ def test_f1_security_records_use_closed_domain_separated_payloads() -> None:
             assert changed.sha256 != record.sha256
 
 
+@pytest.mark.parametrize(
+    "defect",
+    [
+        "source-identity",
+        "mount-path",
+        "git-top-level",
+        "read-only",
+        "git-commit",
+        "git-tree",
+        "execution-record",
+    ],
+)
+def test_r5_source_mount_observation_mutants_fail_closed(defect: str) -> None:
+    facts = _boundary_facts()
+    host_canary = facts.probe_observations[0]
+    mount = host_canary.source_mount_observation
+    assert host_canary.target is ProtectedTarget.HOST_CANARY
+    assert mount is not None
+    assert all(
+        observation.source_mount_observation is None
+        for observation in facts.probe_observations[1:]
+    )
+    replacements: dict[str, object] = {
+        "source-identity": {"source_path_proof_sha256": _digest("other-source-proof")},
+        "mount-path": {"mount_path": PurePosixPath("/tmp/source")},
+        "git-top-level": {"git_top_level": PurePosixPath("/workspace")},
+        "read-only": {"read_only": False},
+        "git-commit": {"git_commit": OTHER_GIT_COMMIT},
+        "git-tree": {"git_tree_digest": OTHER_TREE_DIGEST},
+        "execution-record": {
+            "execution_record_sha256": _digest("other-host-canary-exec")
+        },
+    }
+    changed_mount = replace(mount, **replacements[defect])  # type: ignore[arg-type]
+    changed_host_canary = replace(
+        host_canary,
+        source_mount_observation=changed_mount,
+    )
+
+    with pytest.raises(ValueError):
+        validate_oracle_boundary(
+            replace(
+                facts,
+                probe_observations=(
+                    changed_host_canary,
+                    *facts.probe_observations[1:],
+                ),
+            )
+        )
+
+
+@pytest.mark.parametrize(
+    "defect",
+    [
+        "mount-missing",
+        "mount-wrong-target",
+        "mount-duplicated",
+        "payload-result-digest-misbound",
+    ],
+)
+def test_r5_source_mount_execution_mutants_destroy_agent(defect: str) -> None:
+    executor = F1ExecutorSpy(source_mount_defect=defect)
+
+    with pytest.raises(ValueError):
+        _run_f1(gate=_live_gate(), executor=executor)
+
+    assert _action_ids(executor)[-1] == AGENT_DESTROY_ACTION_ID
+    assert _action_ids(executor).count(AGENT_DESTROY_ACTION_ID) == 1
+    assert ORACLE_CREATE_ACTION_ID not in _action_ids(executor)
+    _assert_destroy_matches_create_observation(executor, SandboxRole.AGENT)
+    _assert_only_registered_sbx_calls(executor)
+
+
 def test_r6_create_and_checker_records_are_canonical_and_domain_separated() -> None:
     facts = _boundary_facts()
     agent_request, oracle_request = facts.create_requests
     agent_create, oracle_create = facts.create_observations
+    engine_identity = facts.engine_identity_observation
     checker = facts.checker_observation
 
     assert agent_request.schema_version == "roguepatch.sandbox-create-request.v1"
     assert oracle_request.schema_version == "roguepatch.sandbox-create-request.v1"
     assert agent_create.schema_version == "roguepatch.sandbox-create-observation.v1"
     assert oracle_create.schema_version == "roguepatch.sandbox-create-observation.v1"
+    assert (
+        engine_identity.schema_version
+        == "roguepatch.oracle-engine-identity-observation.v1"
+    )
     assert checker.schema_version == "roguepatch.oracle-checker-observation.v1"
     assert agent_request.agent_spec is not None
     assert oracle_request.oracle_container is not None
@@ -1548,7 +1992,6 @@ def test_r6_create_and_checker_records_are_canonical_and_domain_separated() -> N
         "schema_version": "roguepatch.sandbox-create-observation.v1",
         "sandbox": {"role": SandboxRole.AGENT.value, "microvm_id": AGENT.microvm_id},
         "request_sha256": agent_request.sha256,
-        "engine_identity_sha256": None,
         "create_result": {
             "returncode": 0,
             "stdout": f"created:{AGENT.microvm_id}",
@@ -1564,7 +2007,6 @@ def test_r6_create_and_checker_records_are_canonical_and_domain_separated() -> N
             "microvm_id": ORACLE.microvm_id,
         },
         "request_sha256": oracle_request.sha256,
-        "engine_identity_sha256": ORACLE_ENGINE_IDENTITY_SHA256,
         "create_result": {
             "returncode": 0,
             "stdout": f"created:{ORACLE.microvm_id}",
@@ -1587,8 +2029,8 @@ def test_r6_create_and_checker_records_are_canonical_and_domain_separated() -> N
         "container_sha256": _oracle_container().sha256,
         "action_registry_sha256": _registry_digest(),
         "candidate_path": str(CANDIDATE_PATH),
-        "observed_digest_before": SOURCE_DIGEST,
-        "observed_digest_after": SOURCE_DIGEST,
+        "observed_digest_before": CANDIDATE_DIGEST,
+        "observed_digest_after": CANDIDATE_DIGEST,
         "engine_identity_sha256": ORACLE_ENGINE_IDENTITY_SHA256,
         "private_engine": True,
         "host_engine_reachable": False,
@@ -1609,6 +2051,7 @@ def test_r6_create_and_checker_records_are_canonical_and_domain_separated() -> N
         oracle_request,
         agent_create,
         oracle_create,
+        engine_identity,
         checker,
     ):
         assert isinstance(record.canonical_payload, bytes)
@@ -1620,10 +2063,11 @@ def test_r6_create_and_checker_records_are_canonical_and_domain_separated() -> N
                 oracle_request.sha256,
                 agent_create.sha256,
                 oracle_create.sha256,
+                engine_identity.sha256,
                 checker.sha256,
             }
         )
-        == 5
+        == 6
     )
 
 
@@ -1632,6 +2076,7 @@ def test_r6_oracle_boundary_probe() -> None:
     trace = facts.execution_trace
     agent_request, oracle_request = executor.create_requests
     agent_create, oracle_create = executor.create_observations
+    engine_identity_observation = executor.engine_identity_observations[0]
     checker_observation = executor.checker_observations[0]
 
     assert validate_oracle_boundary(facts) is None
@@ -1639,6 +2084,7 @@ def test_r6_oracle_boundary_probe() -> None:
     assert trace.schema_version == "roguepatch.f1-execution-trace.v1"
     assert trace == executor.execution_trace
     assert [record.action_id for record in trace.records] == list(TRACE_ACTION_IDS)
+    assert len(trace.records) == 20
     assert [record.sequence for record in trace.records] == list(
         range(1, len(TRACE_ACTION_IDS) + 1)
     )
@@ -1649,17 +2095,18 @@ def test_r6_oracle_boundary_probe() -> None:
     )
     assert [record.microvm_role for record in trace.records] == [
         *([SandboxRole.AGENT] * (len(CANONICAL_PROTECTED_TARGETS) + 3)),
-        *([SandboxRole.ORACLE] * 3),
+        *([SandboxRole.ORACLE] * 4),
     ]
     assert [record.microvm_id for record in trace.records] == [
         *([AGENT.microvm_id] * (len(CANONICAL_PROTECTED_TARGETS) + 3)),
-        *([ORACLE.microvm_id] * 3),
+        *([ORACLE.microvm_id] * 4),
     ]
     assert all(record.status is F1ExecutionStatus.SUCCEEDED for record in trace.records)
     assert len({record.sha256 for record in trace.records}) == len(trace.records)
     assert len(executor.calls) == len(trace.records)
     assert facts.create_requests == (agent_request, oracle_request)
     assert facts.create_observations == (agent_create, oracle_create)
+    assert facts.engine_identity_observation == engine_identity_observation
     assert facts.checker_observation == checker_observation
     assert agent_request.role is SandboxRole.AGENT
     assert agent_request.agent_spec == _agent_spec()
@@ -1673,19 +2120,40 @@ def test_r6_oracle_boundary_probe() -> None:
     assert oracle_request.private_engine is True
     assert agent_create.sandbox == facts.agent
     assert agent_create.request_sha256 == agent_request.sha256
-    assert agent_create.engine_identity_sha256 is None
+    assert not hasattr(agent_create, "engine_identity_sha256")
     assert oracle_create.sandbox == facts.oracle
     assert oracle_create.request_sha256 == oracle_request.sha256
-    assert oracle_create.engine_identity_sha256 == ORACLE_ENGINE_IDENTITY_SHA256
+    assert not hasattr(oracle_create, "engine_identity_sha256")
+    assert engine_identity_observation.sandbox == facts.oracle
+    assert (
+        engine_identity_observation.action_registry_sha256
+        == facts.action_registry_sha256
+    )
+    assert (
+        engine_identity_observation.engine_identity_sha256
+        == ORACLE_ENGINE_IDENTITY_SHA256
+    )
+    assert engine_identity_observation.identity_result.stdout == ORACLE_ENGINE_IDENTITY
+    assert (
+        engine_identity_observation.identity_result.stdout
+        == engine_identity_observation.identity_result.stdout.strip()
+    )
+    assert (
+        engine_identity_observation.engine_identity_sha256
+        == sha256(
+            engine_identity_observation.identity_result.stdout.encode()
+        ).hexdigest()
+    )
+    assert engine_identity_observation.identity_result.succeeded
     assert checker_observation.sandbox == facts.oracle
     assert checker_observation.container == facts.container
     assert checker_observation.action_registry_sha256 == facts.action_registry_sha256
     assert checker_observation.candidate_path == CANDIDATE_PATH
-    assert checker_observation.observed_digest_before == SOURCE_DIGEST
-    assert checker_observation.observed_digest_after == SOURCE_DIGEST
+    assert checker_observation.observed_digest_before == CANDIDATE_DIGEST
+    assert checker_observation.observed_digest_after == CANDIDATE_DIGEST
     assert (
         checker_observation.engine_identity_sha256
-        == oracle_create.engine_identity_sha256
+        == engine_identity_observation.engine_identity_sha256
     )
     assert checker_observation.private_engine is True
     assert checker_observation.host_engine_reachable is False
@@ -1722,6 +2190,14 @@ def test_r6_oracle_boundary_probe() -> None:
         next(
             record
             for record in trace.records
+            if record.action_id == ORACLE_ENGINE_IDENTITY_ACTION_ID
+        ).result_digest
+        == engine_identity_observation.sha256
+    )
+    assert (
+        next(
+            record
+            for record in trace.records
             if record.action_id == ORACLE_CHECKER_ACTION_ID
         ).result_digest
         == checker_observation.sha256
@@ -1739,6 +2215,7 @@ def test_r6_oracle_boundary_probe() -> None:
         assert record.microvm_id == sandbox.microvm_id
         assert len(record.result_digest) == 64
     assert facts.source_read_only is True
+    assert SOURCE_DIGEST != CANDIDATE_DIGEST
     assert facts.workspace_mode is WorkspaceMode.PRIVATE_CLONE
     assert facts.agent_cwd == AGENT_WORKSPACE
     assert facts.agent_cwd != SOURCE_TARGET
@@ -1747,6 +2224,7 @@ def test_r6_oracle_boundary_probe() -> None:
     assert {observation.target for observation in facts.probe_observations} == set(
         ProtectedTarget
     )
+    assert len(ProtectedTarget) == 13
     assert len(facts.execution_records) == len(ProtectedTarget)
 
     specs = {spec.target: spec for spec in facts.probe_specs}
@@ -1773,6 +2251,48 @@ def test_r6_oracle_boundary_probe() -> None:
         assert observation.observed_errno in {errno.ENOENT, errno.EACCES}
         assert record.read_only is True
 
+    host_canary = facts.probe_observations[0]
+    source_mount = host_canary.source_mount_observation
+    assert source_mount == executor.source_mount_observations[0]
+    assert source_mount is not None
+    assert source_mount.sandbox == facts.agent
+    assert source_mount.mount_path == SOURCE_TARGET
+    assert source_mount.git_top_level == SOURCE_TARGET
+    assert (
+        source_mount.source_path_proof_sha256
+        == agent_request.agent_spec.source_path_proof.sha256
+    )
+    assert (
+        source_mount.git_commit == agent_request.agent_spec.source_path_proof.git_commit
+    )
+    assert (
+        source_mount.git_tree_digest
+        == agent_request.agent_spec.source_path_proof.git_tree_digest
+    )
+    assert source_mount.read_only is True
+    assert source_mount.execution_record_sha256 == facts.execution_records[0].sha256
+    host_canary_result_payload = _host_canary_result_payload(
+        target=host_canary.target,
+        observed_errno=host_canary.observed_errno,
+        sandbox=source_mount.sandbox,
+        mount_path=source_mount.mount_path,
+        git_top_level=source_mount.git_top_level,
+        source_path_proof_sha256=source_mount.source_path_proof_sha256,
+        git_commit=source_mount.git_commit,
+        git_tree_digest=source_mount.git_tree_digest,
+        read_only=source_mount.read_only,
+    )
+    assert b"execution_record_sha256" not in host_canary_result_payload
+    assert (
+        facts.execution_records[0].result_digest
+        == sha256(host_canary_result_payload).hexdigest()
+    )
+    assert host_canary.result_digest == facts.execution_records[0].result_digest
+    assert all(
+        observation.source_mount_observation is None
+        for observation in facts.probe_observations[1:]
+    )
+
     assert [record.action for record in facts.lifecycle] == [
         SandboxLifecycleAction.CREATE,
         SandboxLifecycleAction.FREEZE,
@@ -1786,7 +2306,7 @@ def test_r6_oracle_boundary_probe() -> None:
         for record in facts.lifecycle
     )
     assert facts.lifecycle[0].sandbox == facts.agent
-    assert facts.lifecycle[1].candidate_digest == SOURCE_DIGEST
+    assert facts.lifecycle[1].candidate_digest == CANDIDATE_DIGEST
     assert facts.lifecycle[2].sandbox == facts.agent
     assert facts.lifecycle[3].sandbox == facts.oracle
     assert facts.lifecycle[3].limits.cpu_count == 2
@@ -1817,11 +2337,6 @@ def test_r6_oracle_boundary_probe() -> None:
         pytest.param("create-trace", SandboxRole.AGENT, id="create-trace"),
         pytest.param("agent-sandbox", SandboxRole.AGENT, id="agent-sandbox"),
         pytest.param(
-            "agent-engine-identity-present",
-            SandboxRole.AGENT,
-            id="agent-engine-identity-present",
-        ),
-        pytest.param(
             "oracle-request-digest",
             SandboxRole.ORACLE,
             id="oracle-request-digest",
@@ -1840,11 +2355,6 @@ def test_r6_oracle_boundary_probe() -> None:
             "oracle-sandbox",
             SandboxRole.ORACLE,
             id="oracle-sandbox",
-        ),
-        pytest.param(
-            "oracle-engine-identity-missing",
-            SandboxRole.ORACLE,
-            id="oracle-engine-identity-missing",
         ),
         pytest.param(
             "oracle-container",
@@ -1935,14 +2445,6 @@ def test_r6_create_binding_mutants_fail_closed_and_cleanup(
                 ),
             )
         if (
-            defect == "agent-engine-identity-present"
-            and observation.sandbox.role is SandboxRole.AGENT
-        ):
-            return replace(
-                observation,
-                engine_identity_sha256=OTHER_ORACLE_ENGINE_IDENTITY_SHA256,
-            )
-        if (
             defect == "oracle-sandbox"
             and observation.sandbox.role is SandboxRole.ORACLE
         ):
@@ -1953,11 +2455,6 @@ def test_r6_create_binding_mutants_fail_closed_and_cleanup(
                     microvm_id="sbx-oracle-misbound",
                 ),
             )
-        if (
-            defect == "oracle-engine-identity-missing"
-            and observation.sandbox.role is SandboxRole.ORACLE
-        ):
-            return replace(observation, engine_identity_sha256=None)
         return observation
 
     create_result: CommandResult | None = None
@@ -2032,6 +2529,100 @@ def test_r6_create_binding_mutants_fail_closed_and_cleanup(
             if record.action_id == f"g1.sbx.{failed_role.value}.create"
         )
         assert create_trace.status is F1ExecutionStatus.FAILED
+    _assert_only_registered_sbx_calls(executor)
+
+
+@pytest.mark.parametrize(
+    "defect",
+    [
+        "naked-command-result",
+        "engine-trace-digest",
+        "oracle-microvm",
+        "action-registry",
+        "result-identity-mismatch",
+        "engine-failed",
+        "engine-timeout",
+        "engine-truncated",
+    ],
+)
+def test_r6_engine_identity_observation_mutants_fail_closed_and_cleanup(
+    defect: str,
+) -> None:
+    def mutate_observation(
+        observation: OracleEngineIdentityObservation,
+    ) -> OracleEngineIdentityObservation | CommandResult:
+        if defect == "naked-command-result":
+            return observation.identity_result
+        if defect == "oracle-microvm":
+            return replace(
+                observation,
+                sandbox=SandboxRef(
+                    role=SandboxRole.ORACLE,
+                    microvm_id="sbx-oracle-engine-misbound",
+                ),
+            )
+        if defect == "action-registry":
+            return replace(observation, action_registry_sha256=OTHER_DIGEST)
+        return observation
+
+    identity_result: CommandResult | None = None
+    if defect == "result-identity-mismatch":
+        identity_result = CommandResult(
+            returncode=0,
+            stdout=OTHER_ORACLE_ENGINE_IDENTITY,
+            stderr="",
+            timed_out=False,
+            truncated=False,
+        )
+    elif defect == "engine-failed":
+        identity_result = CommandResult(
+            returncode=1,
+            stdout=ORACLE_ENGINE_IDENTITY,
+            stderr="synthetic engine identity failure",
+            timed_out=False,
+            truncated=False,
+        )
+    elif defect == "engine-timeout":
+        identity_result = CommandResult(
+            returncode=None,
+            stdout=ORACLE_ENGINE_IDENTITY,
+            stderr="synthetic engine identity timeout",
+            timed_out=True,
+            truncated=False,
+        )
+    elif defect == "engine-truncated":
+        identity_result = CommandResult(
+            returncode=0,
+            stdout=ORACLE_ENGINE_IDENTITY,
+            stderr="",
+            timed_out=False,
+            truncated=True,
+        )
+    executor = F1ExecutorSpy(
+        engine_identity_observation_mutator=mutate_observation,
+        engine_identity_trace_result_digest=(
+            OTHER_DIGEST if defect == "engine-trace-digest" else None
+        ),
+        engine_identity_result=identity_result,
+    )
+
+    with pytest.raises((OracleCheckFailed, TypeError, ValueError)):
+        _run_f1(gate=_live_gate(), executor=executor)
+
+    expected_actions = [
+        *AGENT_TRACE_ACTION_IDS,
+        ORACLE_CREATE_ACTION_ID,
+        ORACLE_DESTROY_ACTION_ID,
+    ]
+    if defect != "result-identity-mismatch":
+        expected_actions.insert(-1, ORACLE_ENGINE_IDENTITY_ACTION_ID)
+    assert _action_ids(executor) == expected_actions
+    if defect != "result-identity-mismatch":
+        assert executor.trace_records[-2].action_id == ORACLE_ENGINE_IDENTITY_ACTION_ID
+    assert executor.trace_records[-1].action_id == ORACLE_DESTROY_ACTION_ID
+    assert executor.trace_records[-1].status is F1ExecutionStatus.SUCCEEDED
+    _assert_destroy_matches_create_observation(executor, SandboxRole.AGENT)
+    _assert_destroy_matches_create_observation(executor, SandboxRole.ORACLE)
     _assert_only_registered_sbx_calls(executor)
 
 
@@ -2128,9 +2719,9 @@ def test_r6_checker_observation_mutants_fail_closed_and_cleanup(defect: str) -> 
                 agent_docker_socket_execution_record_sha256=host_canary_record.sha256,
             )
         if defect == "candidate-before":
-            return replace(observation, observed_digest_before=OTHER_TREE_DIGEST)
+            return replace(observation, observed_digest_before=SOURCE_DIGEST)
         if defect == "candidate-after":
-            return replace(observation, observed_digest_after=OTHER_TREE_DIGEST)
+            return replace(observation, observed_digest_after=SOURCE_DIGEST)
         if defect == "engine-not-private":
             return replace(observation, private_engine=False)
         if defect == "host-engine-reachable":
@@ -2358,6 +2949,9 @@ def _rechain_trace(
         "missing",
         "reordered",
         "duplicate",
+        "engine-identity-missing",
+        "engine-identity-reordered",
+        "engine-identity-duplicate",
         "broken-chain",
         "unregistered",
         "role-mismatch",
@@ -2384,6 +2978,17 @@ def test_r6_rejects_any_noncanonical_or_unbound_physical_trace(
         records[1], records[2] = records[2], records[1]
     elif trace_defect == "duplicate":
         records.insert(2, records[1])
+    elif trace_defect == "engine-identity-missing":
+        records.pop(TRACE_ACTION_IDS.index(ORACLE_ENGINE_IDENTITY_ACTION_ID))
+    elif trace_defect == "engine-identity-reordered":
+        engine_index = TRACE_ACTION_IDS.index(ORACLE_ENGINE_IDENTITY_ACTION_ID)
+        records[engine_index], records[engine_index + 1] = (
+            records[engine_index + 1],
+            records[engine_index],
+        )
+    elif trace_defect == "engine-identity-duplicate":
+        engine_index = TRACE_ACTION_IDS.index(ORACLE_ENGINE_IDENTITY_ACTION_ID)
+        records.insert(engine_index + 1, records[engine_index])
     elif trace_defect == "unregistered":
         records[1] = replace(
             records[1],
