@@ -190,7 +190,7 @@ never be counted as real ones.
 
 Four families of numbers, kept apart:
 
-| | |
+| family | the question it answers |
 |:--|:--|
 | **security** | did protected state change when it should not have |
 | **utility** | did the legitimate task still get done |
