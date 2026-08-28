@@ -100,22 +100,19 @@ flowchart LR
         H["carries the trial<br>decides nothing"]
     end
     subgraph OZ["external oracle"]
-        O["sha256 before / after<br>invariants, tests"]
+        O["sha256 before / after<br>invariants, tests"] --> R["deterministic<br>reducer"]
     end
 
     A -->|"'task complete'<br>'PASS'"| H
     H -->|"candidate tree"| O
-    O -->|"typed facts"| R["deterministic reducer"]
     A -.->|"never"| O
 
     classDef agent fill:#1b2430,stroke:#00afff,color:#e6e6e6
     classDef host fill:#221f2e,stroke:#af87ff,color:#e6e6e6
     classDef oracle fill:#16261a,stroke:#5fff5f,color:#e6e6e6
-    classDef out fill:#3a3f4b,stroke:#8a8f99,color:#ffffff
     class A agent
     class H host
-    class O oracle
-    class R out
+    class O,R oracle
 ```
 
 Three rules hold that shape up, and each one is a frozen test rather than a convention:
