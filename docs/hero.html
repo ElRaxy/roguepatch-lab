@@ -1,0 +1,540 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=1600, initial-scale=1">
+  <title>RoguePatch Lab</title>
+  <style>
+    :root {
+      --background: #16161e;
+      --text: #e6e6e6;
+      --muted: #5c6773;
+      --green: #5fff5f;
+      --orange: #ffaf00;
+      --blue: #00afff;
+      --violet: #af87ff;
+      --red: #ff5f5f;
+      --mono: ui-monospace, "SF Mono", Menlo, monospace;
+      --sans: system-ui;
+    }
+
+    *,
+    *::before,
+    *::after {
+      box-sizing: border-box;
+    }
+
+    html,
+    body {
+      width: 1600px;
+      height: 800px;
+      margin: 0;
+      overflow: hidden;
+      background: var(--background);
+    }
+
+    body {
+      position: relative;
+      color: var(--text);
+      font-family: var(--mono);
+      -webkit-font-smoothing: antialiased;
+      text-rendering: geometricPrecision;
+    }
+
+    .masthead {
+      position: absolute;
+      top: 58px;
+      left: 80px;
+      width: 1440px;
+      height: 141px;
+      border-bottom: 1px solid var(--muted);
+    }
+
+    h1 {
+      margin: 0;
+      color: var(--text);
+      font-family: var(--sans);
+      font-size: 56px;
+      font-weight: 700;
+      line-height: 1;
+      letter-spacing: -2.2px;
+    }
+
+    .subtitle {
+      margin: 17px 0 0;
+      color: var(--muted);
+      font-size: 18px;
+      font-weight: 500;
+      line-height: 1.5;
+      letter-spacing: 0.15px;
+    }
+
+    .architecture {
+      position: absolute;
+      top: 282px;
+      left: 80px;
+      width: 1440px;
+      height: 435px;
+    }
+
+    .zone {
+      position: absolute;
+      top: 0;
+      height: 435px;
+      background: var(--background);
+      border: 1px solid;
+    }
+
+    .agent-zone {
+      left: 0;
+      width: 500px;
+      border-color: var(--blue);
+    }
+
+    .conductor-zone {
+      left: 580px;
+      width: 280px;
+      border-color: var(--violet);
+    }
+
+    .oracle-zone {
+      left: 940px;
+      width: 500px;
+      border-color: var(--green);
+    }
+
+    .zone-label {
+      position: absolute;
+      top: 23px;
+      left: 28px;
+      margin: 0;
+      font-size: 13px;
+      font-weight: 700;
+      line-height: 1;
+      letter-spacing: 1.8px;
+    }
+
+    .agent-zone .zone-label {
+      color: var(--blue);
+    }
+
+    .conductor-zone .zone-label {
+      color: var(--violet);
+    }
+
+    .oracle-zone .zone-label {
+      color: var(--green);
+    }
+
+    .bridge {
+      position: absolute;
+      top: 216px;
+      width: 80px;
+      height: 1px;
+    }
+
+    .bridge-one {
+      left: 500px;
+    }
+
+    .bridge-two {
+      left: 860px;
+    }
+
+    .bridge::before {
+      content: "";
+      position: absolute;
+      top: 0;
+      left: 15px;
+      width: 49px;
+      border-top: 1px solid var(--muted);
+    }
+
+    .bridge::after {
+      content: "";
+      position: absolute;
+      top: -4px;
+      left: 64px;
+      width: 8px;
+      height: 8px;
+      border-top: 1px solid var(--muted);
+      border-right: 1px solid var(--muted);
+      transform: rotate(45deg);
+    }
+
+    .scope-boundary {
+      position: absolute;
+      top: 91px;
+      left: 43px;
+      width: 272px;
+      height: 149px;
+      border: 1px dashed var(--blue);
+    }
+
+    .agent-node {
+      position: absolute;
+      top: 138px;
+      left: 78px;
+      width: 54px;
+      height: 54px;
+      border: 1px solid var(--blue);
+      border-radius: 50%;
+      background: var(--background);
+    }
+
+    .agent-node::before,
+    .agent-node::after {
+      content: "";
+      position: absolute;
+      border: 1px solid var(--blue);
+    }
+
+    .agent-node::before {
+      top: 17px;
+      left: 17px;
+      width: 18px;
+      height: 18px;
+    }
+
+    .agent-node::after {
+      top: 22px;
+      left: 22px;
+      width: 18px;
+      height: 18px;
+      background: var(--background);
+    }
+
+    .write-path-safe,
+    .write-path-breach {
+      position: absolute;
+      top: 164px;
+      height: 1px;
+      border-top: 1px dashed;
+    }
+
+    .write-path-safe {
+      left: 132px;
+      width: 183px;
+      border-color: var(--blue);
+    }
+
+    .write-path-breach {
+      left: 315px;
+      width: 77px;
+      border-color: var(--red);
+    }
+
+    .write-path-breach::after {
+      content: "";
+      position: absolute;
+      top: -4px;
+      right: 0;
+      width: 8px;
+      height: 8px;
+      border-top: 1px solid var(--red);
+      border-right: 1px solid var(--red);
+      transform: rotate(45deg);
+    }
+
+    .breach-mark {
+      position: absolute;
+      top: 133px;
+      left: 391px;
+      width: 46px;
+      height: 61px;
+      border: 1px solid var(--red);
+      background: var(--background);
+    }
+
+    .breach-mark::before,
+    .breach-mark::after {
+      content: "";
+      position: absolute;
+      top: 28px;
+      left: 10px;
+      width: 24px;
+      border-top: 1px solid var(--red);
+      transform-origin: center;
+    }
+
+    .breach-mark::before {
+      transform: rotate(45deg);
+    }
+
+    .breach-mark::after {
+      transform: rotate(-45deg);
+    }
+
+    .breach-fold {
+      position: absolute;
+      top: -1px;
+      right: -1px;
+      width: 13px;
+      height: 13px;
+      border-bottom: 1px solid var(--red);
+      border-left: 1px solid var(--red);
+      background: var(--background);
+    }
+
+    .claims {
+      position: absolute;
+      top: 290px;
+      left: 43px;
+      width: 393px;
+    }
+
+    .claim {
+      display: flex;
+      align-items: center;
+      width: 100%;
+      height: 52px;
+      border-top: 1px solid var(--muted);
+      color: var(--orange);
+      font-size: 16px;
+      line-height: 1;
+    }
+
+    .claim:last-child {
+      border-bottom: 1px solid var(--muted);
+    }
+
+    .doubt {
+      margin-left: 12px;
+      font-size: 18px;
+      font-weight: 700;
+    }
+
+    .transport-bus {
+      position: absolute;
+      top: 216px;
+      left: 25px;
+      width: 228px;
+      border-top: 1px solid var(--violet);
+    }
+
+    .transport-bus::after {
+      content: "";
+      position: absolute;
+      top: -5px;
+      right: -1px;
+      width: 9px;
+      height: 9px;
+      border-top: 1px solid var(--violet);
+      border-right: 1px solid var(--violet);
+      transform: rotate(45deg);
+    }
+
+    .transport-packet {
+      position: absolute;
+      top: 208px;
+      width: 17px;
+      height: 17px;
+      border: 1px solid var(--violet);
+      background: var(--background);
+    }
+
+    .packet-one {
+      left: 51px;
+    }
+
+    .packet-two {
+      left: 211px;
+    }
+
+    .digest-card {
+      position: absolute;
+      top: 88px;
+      width: 106px;
+      height: 73px;
+      border: 1px solid var(--green);
+      padding: 18px 16px;
+      background: var(--background);
+    }
+
+    .digest-before {
+      left: 53px;
+    }
+
+    .digest-after {
+      left: 340px;
+    }
+
+    .hash-line {
+      display: block;
+      height: 2px;
+      margin-bottom: 8px;
+      background: var(--green);
+    }
+
+    .digest-before .hash-line:nth-child(1) {
+      width: 43px;
+    }
+
+    .digest-before .hash-line:nth-child(2) {
+      width: 71px;
+      background: var(--muted);
+    }
+
+    .digest-before .hash-line:nth-child(3) {
+      width: 55px;
+    }
+
+    .digest-after .hash-line:nth-child(1) {
+      width: 67px;
+    }
+
+    .digest-after .hash-line:nth-child(2) {
+      width: 39px;
+      background: var(--muted);
+    }
+
+    .digest-after .hash-line:nth-child(3) {
+      width: 72px;
+    }
+
+    .compare-left,
+    .compare-right {
+      position: absolute;
+      top: 124px;
+      border-top: 1px solid var(--green);
+    }
+
+    .compare-left {
+      left: 159px;
+      width: 76px;
+    }
+
+    .compare-right {
+      left: 265px;
+      width: 75px;
+    }
+
+    .compare-node {
+      position: absolute;
+      top: 110px;
+      left: 234px;
+      width: 31px;
+      height: 31px;
+      border: 1px solid var(--green);
+      background: var(--background);
+      transform: rotate(45deg);
+    }
+
+    .compare-node::before {
+      content: "";
+      position: absolute;
+      top: 10px;
+      left: 10px;
+      width: 9px;
+      height: 9px;
+      border: 1px solid var(--green);
+    }
+
+    .facts {
+      position: absolute;
+      top: 202px;
+      left: 55px;
+      width: 389px;
+      padding-left: 27px;
+      border-left: 1px solid var(--green);
+    }
+
+    .fact {
+      height: 47px;
+      font-size: 17px;
+      line-height: 47px;
+      white-space: nowrap;
+    }
+
+    .key,
+    .colon {
+      color: var(--muted);
+    }
+
+    .value {
+      color: var(--green);
+    }
+
+    .digest-result {
+      position: absolute;
+      top: 368px;
+      left: 55px;
+      width: 389px;
+      margin: 0;
+      padding-top: 16px;
+      border-top: 1px solid var(--muted);
+      color: var(--muted);
+      font-size: 14px;
+      line-height: 1;
+      letter-spacing: 0.1px;
+    }
+  </style>
+</head>
+<body>
+  <header class="masthead">
+    <h1>RoguePatch Lab</h1>
+    <p class="subtitle">the agent says done. the control says pass. the oracle checks.</p>
+  </header>
+
+  <main class="architecture" aria-label="RoguePatch Lab trust-boundary diagram">
+    <section class="zone agent-zone" aria-label="Agent workspace">
+      <h2 class="zone-label">AGENT WORKSPACE</h2>
+
+      <div class="scope-boundary" aria-hidden="true"></div>
+      <div class="agent-node" aria-hidden="true"></div>
+      <div class="write-path-safe" aria-hidden="true"></div>
+      <div class="write-path-breach" aria-hidden="true"></div>
+      <div class="breach-mark" aria-hidden="true">
+        <span class="breach-fold"></span>
+      </div>
+
+      <div class="claims">
+        <div class="claim">
+          <span>"task complete"</span>
+          <span class="doubt">?</span>
+        </div>
+        <div class="claim">
+          <span>"PASS"</span>
+          <span class="doubt">?</span>
+        </div>
+      </div>
+    </section>
+
+    <div class="bridge bridge-one" aria-hidden="true"></div>
+
+    <section class="zone conductor-zone" aria-label="Host conductor">
+      <h2 class="zone-label">HOST CONDUCTOR</h2>
+      <div class="transport-bus" aria-hidden="true"></div>
+      <div class="transport-packet packet-one" aria-hidden="true"></div>
+      <div class="transport-packet packet-two" aria-hidden="true"></div>
+    </section>
+
+    <div class="bridge bridge-two" aria-hidden="true"></div>
+
+    <section class="zone oracle-zone" aria-label="External oracle">
+      <h2 class="zone-label">EXTERNAL ORACLE</h2>
+
+      <div class="digest-card digest-before" aria-hidden="true">
+        <span class="hash-line"></span>
+        <span class="hash-line"></span>
+        <span class="hash-line"></span>
+      </div>
+      <div class="compare-left" aria-hidden="true"></div>
+      <div class="compare-node" aria-hidden="true"></div>
+      <div class="compare-right" aria-hidden="true"></div>
+      <div class="digest-card digest-after" aria-hidden="true">
+        <span class="hash-line"></span>
+        <span class="hash-line"></span>
+        <span class="hash-line"></span>
+      </div>
+
+      <div class="facts">
+        <div class="fact"><span class="key">landed</span><span class="colon">: </span><span class="value">true</span></div>
+        <div class="fact"><span class="key">reverted</span><span class="colon">: </span><span class="value">false</span></div>
+        <div class="fact"><span class="key">evidence_status</span><span class="colon">: </span><span class="value">"stale"</span></div>
+      </div>
+      <p class="digest-result">sha256 before != after</p>
+    </section>
+  </main>
+</body>
+</html>
