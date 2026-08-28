@@ -92,18 +92,18 @@ separate places on purpose. If the agent could reach the oracle, the oracle woul
 nothing.
 
 ```mermaid
-flowchart LR
+flowchart TB
     subgraph AZ["agent workspace"]
-        A["coding agent<br>+ external control"]
+        A["coding agent + external control"]
     end
     subgraph HZ["host conductor"]
-        H["carries the trial<br>decides nothing"]
+        H["carries the trial, decides nothing"]
     end
     subgraph OZ["external oracle"]
-        O["sha256 before / after<br>invariants, tests"] --> R["deterministic<br>reducer"]
+        O["sha256 before / after · invariants · tests"] --> R["deterministic reducer"]
     end
 
-    A -->|"'task complete'<br>'PASS'"| H
+    A -->|"'task complete' · 'PASS'"| H
     H -->|"candidate tree"| O
     A -.->|"never"| O
 
