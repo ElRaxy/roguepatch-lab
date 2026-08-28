@@ -126,7 +126,7 @@ Three rules hold that shape up, and each one is a frozen test rather than a conv
   boundary and a fake row raises `IneligibleEvidenceError` instead of quietly inflating a
   denominator ([`tests/unit/test_fake_fixture_integrity.py`](tests/unit/test_fake_fixture_integrity.py)).
 
-> The sandbox, subprocess and preflight boundaries that enforce the *left* half of that diagram
+> The sandbox, subprocess and preflight boundaries that enforce the agent and conductor zones
 > live on `codex/f1-preflight`, not here. On `main` the oracle zone is a port that the fake
 > backend fills. See [Status](#-status-no-results-yet).
 
